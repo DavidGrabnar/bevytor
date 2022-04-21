@@ -1,5 +1,6 @@
 mod tree;
 
+use std::borrow::Borrow;
 use bevy::prelude::*;
 use bevy_egui::egui::Slider;
 use bevy_egui::{egui, EguiContext, EguiPlugin};
@@ -7,7 +8,7 @@ use std::collections::HashMap;
 
 #[derive(Default)]
 struct InspectorState {
-    open_entity_id: Option<u32>,
+    selected_entity: Box<Option<Entity>>,
 }
 
 fn main() {
@@ -70,25 +71,25 @@ fn setup_ui_hierarchy(
     query: Query<(Entity, Option<&Parent>, Option<&Children>)>,
     mut inspector_state: ResMut<InspectorState>,
 ) {
-    let mut entity_children: HashMap<u32, &Children> = HashMap::new();
+    let mut entity_children: HashMap<Entity, &Children> = HashMap::new();
     for (entity, _parent, children) in query.iter() {
         if let Some(some_children) = children {
-            entity_children.insert(entity.id(), some_children);
+            entity_children.insert(entity, some_children);
         }
     }
     let mut parents = vec![];
     for (entity, parent, _children) in query.iter() {
         if parent.is_none() {
-            parents.push(build_node(&entity, &entity_children));
+            parents.push(build_node(entity, &entity_children));
         }
     }
     egui::Window::new("Hierarchy").show(egui_context.ctx_mut(), |ui| {
-        let root = tree::Node::new("Scene".to_string(), None, parents);
+        let root = tree::Node::new(None, parents);
         let tree = tree::Tree::new(root);
 
         let action = tree.ui(ui);
         if let tree::Action::Selected(id) = action {
-            inspector_state.open_entity_id = Some(id);
+            inspector_state.selected_entity = Box::new(Some(id));
         }
     });
 }
@@ -98,9 +99,9 @@ fn setup_ui_inspector(
     mut query: Query<(Entity, &mut Transform)>,
     inspector_state: Res<InspectorState>,
 ) {
-    if let Some(open_id) = inspector_state.open_entity_id {
+    if let Some(open_id) = inspector_state.selected_entity.borrow() {
         for (entity, mut transform) in query.iter_mut() {
-            if entity.id() == open_id {
+            if entity.id() == open_id.id() {
                 egui::Window::new("Inspector").show(egui_context.ctx_mut(), |ui| {
                     ui.add(Slider::new(&mut transform.translation.x, -10.0..=10.0).text("X"));
                     ui.add(Slider::new(&mut transform.translation.y, -10.0..=10.0).text("Y"));
@@ -111,14 +112,14 @@ fn setup_ui_inspector(
     }
 }
 
-fn build_node(entity: &Entity, entity_children: &HashMap<u32, &Children>) -> tree::Node {
+fn build_node(entity: Entity, entity_children: &HashMap<Entity, &Children>) -> tree::Node {
     let mut child_nodes = vec![];
 
-    if let Some(children) = entity_children.get(&entity.id()) {
+    if let Some(children) = entity_children.get(&entity) {
         for child in children.iter() {
-            child_nodes.push(build_node(child, entity_children));
+            child_nodes.push(build_node(*child, entity_children));
         }
     }
 
-    tree::Node::new(entity.id().to_string(), Some(entity.id()), child_nodes)
+    tree::Node::new(Some(entity), child_nodes)
 }
