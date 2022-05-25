@@ -1,21 +1,17 @@
 mod tree;
 
-use std::borrow::Borrow;
 use bevy::prelude::*;
 use bevy_egui::egui::Slider;
 use bevy_egui::{egui, EguiContext, EguiPlugin};
 use std::collections::HashMap;
 
-#[derive(Default)]
-struct InspectorState {
-    selected_entity: Box<Option<Entity>>,
-}
+#[derive(Component)]
+struct SelectedEntity;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugin(EguiPlugin)
-        .init_resource::<InspectorState>()
         .add_startup_system(setup_scene)
         .add_system(setup_ui_hierarchy)
         .add_system(setup_ui_inspector)
@@ -68,17 +64,18 @@ fn setup_scene(
 
 fn setup_ui_hierarchy(
     mut egui_context: ResMut<EguiContext>,
-    query: Query<(Entity, Option<&Parent>, Option<&Children>)>,
-    mut inspector_state: ResMut<InspectorState>,
+    query_hierarchy: Query<(Entity, Option<&Parent>, Option<&Children>)>,
+    query_selected_entity: Query<Entity, With<SelectedEntity>>,
+    mut commands: Commands
 ) {
     let mut entity_children: HashMap<Entity, &Children> = HashMap::new();
-    for (entity, _parent, children) in query.iter() {
+    for (entity, _parent, children) in query_hierarchy.iter() {
         if let Some(some_children) = children {
             entity_children.insert(entity, some_children);
         }
     }
     let mut parents = vec![];
-    for (entity, parent, _children) in query.iter() {
+    for (entity, parent, _children) in query_hierarchy.iter() {
         if parent.is_none() {
             parents.push(build_node(entity, &entity_children));
         }
@@ -88,27 +85,25 @@ fn setup_ui_hierarchy(
         let tree = tree::Tree::new(root);
 
         let action = tree.ui(ui);
-        if let tree::Action::Selected(id) = action {
-            inspector_state.selected_entity = Box::new(Some(id));
+        if let tree::Action::Selected(selectedEntity) = action {
+            for entity in query_selected_entity.iter() {
+                commands.entity(entity).remove::<SelectedEntity>();
+            }
+            commands.entity(selectedEntity).insert(SelectedEntity);
         }
     });
 }
 
 fn setup_ui_inspector(
     mut egui_context: ResMut<EguiContext>,
-    mut query: Query<(Entity, &mut Transform)>,
-    inspector_state: Res<InspectorState>,
+    mut query_selected_entity: Query<&mut Transform, With<SelectedEntity>>
 ) {
-    if let Some(open_id) = inspector_state.selected_entity.borrow() {
-        for (entity, mut transform) in query.iter_mut() {
-            if entity.id() == open_id.id() {
-                egui::Window::new("Inspector").show(egui_context.ctx_mut(), |ui| {
-                    ui.add(Slider::new(&mut transform.translation.x, -10.0..=10.0).text("X"));
-                    ui.add(Slider::new(&mut transform.translation.y, -10.0..=10.0).text("Y"));
-                    ui.add(Slider::new(&mut transform.translation.z, -10.0..=10.0).text("Z"));
-                });
-            }
-        }
+    if let Ok(mut transform) = query_selected_entity.get_single_mut() {
+        egui::Window::new("Inspector").show(egui_context.ctx_mut(), |ui| {
+            ui.add(Slider::new(&mut transform.translation.x, -10.0..=10.0).text("X"));
+            ui.add(Slider::new(&mut transform.translation.y, -10.0..=10.0).text("Y"));
+            ui.add(Slider::new(&mut transform.translation.z, -10.0..=10.0).text("Z"));
+        });
     }
 }
 
