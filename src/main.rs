@@ -1,7 +1,7 @@
 mod tree;
 
 use bevy::prelude::*;
-use bevy_egui::egui::Slider;
+use bevy_egui::egui::{DragValue, Grid};
 use bevy_egui::{egui, EguiContext, EguiPlugin};
 use std::collections::HashMap;
 
@@ -85,11 +85,11 @@ fn setup_ui_hierarchy(
         let tree = tree::Tree::new(root);
 
         let action = tree.ui(ui);
-        if let tree::Action::Selected(selectedEntity) = action {
+        if let tree::Action::Selected(selected_entity) = action {
             for entity in query_selected_entity.iter() {
                 commands.entity(entity).remove::<SelectedEntity>();
             }
-            commands.entity(selectedEntity).insert(SelectedEntity);
+            commands.entity(selected_entity).insert(SelectedEntity);
         }
     });
 }
@@ -100,9 +100,33 @@ fn setup_ui_inspector(
 ) {
     if let Ok(mut transform) = query_selected_entity.get_single_mut() {
         egui::Window::new("Inspector").show(egui_context.ctx_mut(), |ui| {
-            ui.add(Slider::new(&mut transform.translation.x, -10.0..=10.0).text("X"));
-            ui.add(Slider::new(&mut transform.translation.y, -10.0..=10.0).text("Y"));
-            ui.add(Slider::new(&mut transform.translation.z, -10.0..=10.0).text("Z"));
+            Grid::new("transformation")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label("Translation");
+                    ui.horizontal(|ui| {
+                        ui.add(DragValue::new(&mut transform.translation.x).fixed_decimals(2).speed(0.1));
+                        ui.add(DragValue::new(&mut transform.translation.y).fixed_decimals(2).speed(0.1));
+                        ui.add(DragValue::new(&mut transform.translation.z).fixed_decimals(2).speed(0.1));
+                    });
+                    ui.end_row();
+                    ui.label("Rotation");
+                    ui.horizontal(|ui| {
+                        ui.add(build_rotation_drag_value_input(&mut transform, &EulerRot::XYZ).fixed_decimals(2).speed(0.01));
+                        ui.add(build_rotation_drag_value_input(&mut transform, &EulerRot::YZX).fixed_decimals(2).speed(0.01));
+                        ui.add(build_rotation_drag_value_input(&mut transform, &EulerRot::ZXY).fixed_decimals(2).speed(0.01));
+                    });
+                    ui.end_row();
+                    ui.label("Scale");
+                    ui.horizontal(|ui| {
+                        ui.add(DragValue::new(&mut transform.scale.x).fixed_decimals(2).speed(0.1));
+                        ui.add(DragValue::new(&mut transform.scale.y).fixed_decimals(2).speed(0.1));
+                        ui.add(DragValue::new(&mut transform.scale.z).fixed_decimals(2).speed(0.1));
+                    });
+                    ui.end_row();
+                    ui.separator();
+                });
+
         });
     }
 }
@@ -117,4 +141,14 @@ fn build_node(entity: Entity, entity_children: &HashMap<Entity, &Children>) -> t
     }
 
     tree::Node::new(Some(entity), child_nodes)
+}
+
+fn build_rotation_drag_value_input<'a>(transform: &'a mut Transform, euler_rot: &'a EulerRot) -> DragValue<'a> {
+    DragValue::from_get_set(|input| {
+        if let Some(value) = input {
+            let euler = transform.rotation.to_euler(*euler_rot);
+            transform.rotate(Quat::from_euler(*euler_rot, value as f32 - euler.0, 0.0, 0.0));
+        }
+        transform.rotation.to_euler(*euler_rot).0 as f64
+    })
 }
