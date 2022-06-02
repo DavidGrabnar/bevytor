@@ -1,5 +1,5 @@
 use bevy::prelude::Entity;
-use crate::egui::{CollapsingHeader, Ui};
+use bevy_egui::egui::{CollapsingHeader, Ui};
 
 pub enum Action {
     NoAction,
