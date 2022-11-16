@@ -1,0 +1,854 @@
+[
+  (
+    entity: 3,
+    components: [
+      {
+        "type": "bevy_transform::components::transform::Transform",
+        "struct": {
+          "translation": {
+            "type": "glam::f32::vec3::Vec3",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 3.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 8.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 5.0,
+              },
+            },
+          },
+          "rotation": {
+            "type": "glam::f32::sse2::quat::Quat",
+            "value": (0.0, 0.0, 0.0, 1.0),
+          },
+          "scale": {
+            "type": "glam::f32::vec3::Vec3",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 1.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 1.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 1.0,
+              },
+            },
+          },
+        },
+      },
+      {
+        "type": "bevy_transform::components::global_transform::GlobalTransform",
+        "tuple_struct": [
+          {
+            "type": "glam::f32::affine3a::Affine3A",
+            "struct": {
+              "matrix3": {
+                "type": "glam::f32::sse2::mat3a::Mat3A",
+                "struct": {
+                  "x_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                    },
+                  },
+                  "y_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                    },
+                  },
+                  "z_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                    },
+                  },
+                },
+              },
+              "translation": {
+                "type": "glam::f32::sse2::vec3a::Vec3A",
+                "struct": {
+                  "x": {
+                    "type": "f32",
+                    "value": 3.0,
+                  },
+                  "y": {
+                    "type": "f32",
+                    "value": 8.0,
+                  },
+                  "z": {
+                    "type": "f32",
+                    "value": 5.0,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+      {
+        "type": "bevy_render::view::visibility::Visibility",
+        "struct": {
+          "is_visible": {
+            "type": "bool",
+            "value": true,
+          },
+        },
+      },
+      {
+        "type": "bevy_render::view::visibility::ComputedVisibility",
+        "struct": {
+          "is_visible_in_hierarchy": {
+            "type": "bool",
+            "value": true,
+          },
+          "is_visible_in_view": {
+            "type": "bool",
+            "value": true,
+          },
+        },
+      },
+      {
+        "type": "bevy_pbr::light::PointLight",
+        "struct": {
+          "color": {
+            "type": "bevy_render::color::Color",
+            "value": Rgba(
+              red: 1.0,
+              green: 1.0,
+              blue: 1.0,
+              alpha: 1.0,
+            ),
+          },
+          "intensity": {
+            "type": "f32",
+            "value": 800.0,
+          },
+          "range": {
+            "type": "f32",
+            "value": 20.0,
+          },
+          "radius": {
+            "type": "f32",
+            "value": 0.0,
+          },
+          "shadows_enabled": {
+            "type": "bool",
+            "value": false,
+          },
+          "shadow_depth_bias": {
+            "type": "f32",
+            "value": 0.02,
+          },
+          "shadow_normal_bias": {
+            "type": "f32",
+            "value": 0.6,
+          },
+        },
+      },
+      {
+        "type": "bevy_pbr::bundle::CubemapVisibleEntities",
+        "struct": {},
+      },
+      {
+        "type": "bevy_render::primitives::CubemapFrusta",
+        "struct": {},
+      },
+    ],
+  ),
+  (
+    entity: 0,
+    components: [
+      {
+        "type": "bevy_asset::handle::Handle<bevy_render::mesh::mesh::Mesh>",
+        "struct": {
+          "id": {
+            "type": "bevy_asset::handle::HandleId",
+            "value": Id("8ecbac0f-f545-4473-ad43-e1f4243af51e", 14997970011285428877),
+          },
+        },
+      },
+      {
+        "type": "bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>",
+        "struct": {
+          "id": {
+            "type": "bevy_asset::handle::HandleId",
+            "value": Id("7494888b-c082-457b-aacf-517228cc0c22", 9399192938557672737),
+          },
+        },
+      },
+      {
+        "type": "bevy_transform::components::transform::Transform",
+        "struct": {
+          "translation": {
+            "type": "glam::f32::vec3::Vec3",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 0.0,
+              },
+            },
+          },
+          "rotation": {
+            "type": "glam::f32::sse2::quat::Quat",
+            "value": (0.0, 0.0, 0.0, 1.0),
+          },
+          "scale": {
+            "type": "glam::f32::vec3::Vec3",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 1.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 1.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 1.0,
+              },
+            },
+          },
+        },
+      },
+      {
+        "type": "bevy_transform::components::global_transform::GlobalTransform",
+        "tuple_struct": [
+          {
+            "type": "glam::f32::affine3a::Affine3A",
+            "struct": {
+              "matrix3": {
+                "type": "glam::f32::sse2::mat3a::Mat3A",
+                "struct": {
+                  "x_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                    },
+                  },
+                  "y_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                    },
+                  },
+                  "z_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                    },
+                  },
+                },
+              },
+              "translation": {
+                "type": "glam::f32::sse2::vec3a::Vec3A",
+                "struct": {
+                  "x": {
+                    "type": "f32",
+                    "value": 0.0,
+                  },
+                  "y": {
+                    "type": "f32",
+                    "value": 0.0,
+                  },
+                  "z": {
+                    "type": "f32",
+                    "value": 0.0,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+      {
+        "type": "bevy_render::view::visibility::Visibility",
+        "struct": {
+          "is_visible": {
+            "type": "bool",
+            "value": true,
+          },
+        },
+      },
+      {
+        "type": "bevy_render::view::visibility::ComputedVisibility",
+        "struct": {
+          "is_visible_in_hierarchy": {
+            "type": "bool",
+            "value": true,
+          },
+          "is_visible_in_view": {
+            "type": "bool",
+            "value": true,
+          },
+        },
+      },
+      {
+        "type": "bevy_render::primitives::Aabb",
+        "struct": {
+          "center": {
+            "type": "glam::f32::sse2::vec3a::Vec3A",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 0.0,
+              },
+            },
+          },
+          "half_extents": {
+            "type": "glam::f32::sse2::vec3a::Vec3A",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 2.5,
+              },
+              "y": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 2.5,
+              },
+            },
+          },
+        },
+      },
+    ],
+  ),
+  (
+    entity: 1,
+    components: [
+      {
+        "type": "bevy_asset::handle::Handle<bevy_render::mesh::mesh::Mesh>",
+        "struct": {
+          "id": {
+            "type": "bevy_asset::handle::HandleId",
+            "value": Id("8ecbac0f-f545-4473-ad43-e1f4243af51e", 9274126780494902850),
+          },
+        },
+      },
+      {
+        "type": "bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>",
+        "struct": {
+          "id": {
+            "type": "bevy_asset::handle::HandleId",
+            "value": Id("7494888b-c082-457b-aacf-517228cc0c22", 13487579056845269015),
+          },
+        },
+      },
+      {
+        "type": "bevy_transform::components::transform::Transform",
+        "struct": {
+          "translation": {
+            "type": "glam::f32::vec3::Vec3",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 0.5,
+              },
+              "z": {
+                "type": "f32",
+                "value": 0.0,
+              },
+            },
+          },
+          "rotation": {
+            "type": "glam::f32::sse2::quat::Quat",
+            "value": (0.0, 0.0, 0.0, 1.0),
+          },
+          "scale": {
+            "type": "glam::f32::vec3::Vec3",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 1.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 1.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 1.0,
+              },
+            },
+          },
+        },
+      },
+      {
+        "type": "bevy_transform::components::global_transform::GlobalTransform",
+        "tuple_struct": [
+          {
+            "type": "glam::f32::affine3a::Affine3A",
+            "struct": {
+              "matrix3": {
+                "type": "glam::f32::sse2::mat3a::Mat3A",
+                "struct": {
+                  "x_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                    },
+                  },
+                  "y_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                    },
+                  },
+                  "z_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                    },
+                  },
+                },
+              },
+              "translation": {
+                "type": "glam::f32::sse2::vec3a::Vec3A",
+                "struct": {
+                  "x": {
+                    "type": "f32",
+                    "value": 0.0,
+                  },
+                  "y": {
+                    "type": "f32",
+                    "value": 1.5,
+                  },
+                  "z": {
+                    "type": "f32",
+                    "value": 0.0,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+      {
+        "type": "bevy_render::view::visibility::Visibility",
+        "struct": {
+          "is_visible": {
+            "type": "bool",
+            "value": true,
+          },
+        },
+      },
+      {
+        "type": "bevy_render::view::visibility::ComputedVisibility",
+        "struct": {
+          "is_visible_in_hierarchy": {
+            "type": "bool",
+            "value": true,
+          },
+          "is_visible_in_view": {
+            "type": "bool",
+            "value": true,
+          },
+        },
+      },
+      {
+        "type": "bevy_hierarchy::components::parent::Parent",
+        "tuple_struct": [
+          {
+            "type": "bevy_ecs::entity::Entity",
+            "value": 2,
+          },
+        ],
+      },
+      {
+        "type": "bevy_render::primitives::Aabb",
+        "struct": {
+          "center": {
+            "type": "glam::f32::sse2::vec3a::Vec3A",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 0.0,
+              },
+            },
+          },
+          "half_extents": {
+            "type": "glam::f32::sse2::vec3a::Vec3A",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 0.5,
+              },
+              "y": {
+                "type": "f32",
+                "value": 0.5,
+              },
+              "z": {
+                "type": "f32",
+                "value": 0.5,
+              },
+            },
+          },
+        },
+      },
+    ],
+  ),
+  (
+    entity: 2,
+    components: [
+      {
+        "type": "bevy_asset::handle::Handle<bevy_render::mesh::mesh::Mesh>",
+        "struct": {
+          "id": {
+            "type": "bevy_asset::handle::HandleId",
+            "value": Id("8ecbac0f-f545-4473-ad43-e1f4243af51e", 15114585820539629785),
+          },
+        },
+      },
+      {
+        "type": "bevy_asset::handle::Handle<bevy_pbr::pbr_material::StandardMaterial>",
+        "struct": {
+          "id": {
+            "type": "bevy_asset::handle::HandleId",
+            "value": Id("7494888b-c082-457b-aacf-517228cc0c22", 2626654359401176236),
+          },
+        },
+      },
+      {
+        "type": "bevy_transform::components::transform::Transform",
+        "struct": {
+          "translation": {
+            "type": "glam::f32::vec3::Vec3",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 1.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 0.0,
+              },
+            },
+          },
+          "rotation": {
+            "type": "glam::f32::sse2::quat::Quat",
+            "value": (0.0, 0.0, 0.0, 1.0),
+          },
+          "scale": {
+            "type": "glam::f32::vec3::Vec3",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 1.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 1.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 1.0,
+              },
+            },
+          },
+        },
+      },
+      {
+        "type": "bevy_transform::components::global_transform::GlobalTransform",
+        "tuple_struct": [
+          {
+            "type": "glam::f32::affine3a::Affine3A",
+            "struct": {
+              "matrix3": {
+                "type": "glam::f32::sse2::mat3a::Mat3A",
+                "struct": {
+                  "x_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                    },
+                  },
+                  "y_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                    },
+                  },
+                  "z_axis": {
+                    "type": "glam::f32::sse2::vec3a::Vec3A",
+                    "struct": {
+                      "x": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "y": {
+                        "type": "f32",
+                        "value": 0.0,
+                      },
+                      "z": {
+                        "type": "f32",
+                        "value": 1.0,
+                      },
+                    },
+                  },
+                },
+              },
+              "translation": {
+                "type": "glam::f32::sse2::vec3a::Vec3A",
+                "struct": {
+                  "x": {
+                    "type": "f32",
+                    "value": 0.0,
+                  },
+                  "y": {
+                    "type": "f32",
+                    "value": 1.0,
+                  },
+                  "z": {
+                    "type": "f32",
+                    "value": 0.0,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+      {
+        "type": "bevy_render::view::visibility::Visibility",
+        "struct": {
+          "is_visible": {
+            "type": "bool",
+            "value": true,
+          },
+        },
+      },
+      {
+        "type": "bevy_render::view::visibility::ComputedVisibility",
+        "struct": {
+          "is_visible_in_hierarchy": {
+            "type": "bool",
+            "value": true,
+          },
+          "is_visible_in_view": {
+            "type": "bool",
+            "value": true,
+          },
+        },
+      },
+      {
+        "type": "bevy_hierarchy::components::children::Children",
+        "tuple_struct": [
+          {
+            "type": "smallvec::SmallVec<[bevy_ecs::entity::Entity; 8]>",
+            "list": [
+              {
+                "type": "bevy_ecs::entity::Entity",
+                "value": 1,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        "type": "bevy_render::primitives::Aabb",
+        "struct": {
+          "center": {
+            "type": "glam::f32::sse2::vec3a::Vec3A",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "y": {
+                "type": "f32",
+                "value": 0.0,
+              },
+              "z": {
+                "type": "f32",
+                "value": 0.0,
+              },
+            },
+          },
+          "half_extents": {
+            "type": "glam::f32::sse2::vec3a::Vec3A",
+            "struct": {
+              "x": {
+                "type": "f32",
+                "value": 0.5,
+              },
+              "y": {
+                "type": "f32",
+                "value": 0.5,
+              },
+              "z": {
+                "type": "f32",
+                "value": 0.5,
+              },
+            },
+          },
+        },
+      },
+    ],
+  ),
+]
