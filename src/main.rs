@@ -1,54 +1,40 @@
+use std::borrow::Cow;
 use bevy::prelude::*;
-use bevytor_spy::plugin::SpyPlugin;
+use bevy::reflect::{FromType, TypeData, TypeRegistration, TypeRegistryArc};
+use bevy::render::camera::{Projection, Viewport};
 
 fn main() {
     App::new()
+        .register_type::<Option<Viewport>>()
+        .register_type_data::<Option<Viewport>, ReflectSerialize>()
+        .register_type::<Cow<str>>()
+        .register_type::<Projection>()
         .add_plugins(DefaultPlugins)
-        .add_plugin(SpyPlugin)
         .add_startup_system(setup_scene)
+        .add_system(save_scene)
         .run();
 }
 
 fn setup_scene(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands
 ) {
-    // set up the camera
-    let mut camera = OrthographicCameraBundle::new_3d();
-    camera.orthographic_projection.scale = 3.0;
-    camera.transform = Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y);
+    commands.spawn_bundle(Camera3dBundle::default());
+}
 
-    // camera
-    commands.spawn_bundle(camera);
+fn save_scene(world: &World) {
+    // just to be sure
+    std::thread::sleep(std::time::Duration::from_secs(2));
 
-    // plane
-    commands.spawn_bundle(PbrBundle {
-        mesh: meshes.add(Mesh::from(shape::Plane { size: 5.0 })),
-        material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
-        ..Default::default()
-    });
-    // cube
-    let cube = commands
-        .spawn_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
-            material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
-            transform: Transform::from_xyz(0.0, 0.5, 0.0),
-            ..Default::default()
-        })
-        .id();
-    // child cube
-    commands
-        .spawn_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
-            material: materials.add(Color::rgb(0.6, 0.7, 0.8).into()),
-            transform: Transform::from_xyz(0.0, 1.0, 0.0),
-            ..Default::default()
-        })
-        .insert(Parent(cube));
-    // light
-    commands.spawn_bundle(PointLightBundle {
-        transform: Transform::from_xyz(3.0, 8.0, 5.0),
-        ..Default::default()
-    });
+    let type_registry_arc = world.resource::<TypeRegistryArc>();
+
+    // let mut write = type_registry_arc.write();
+    // let mut reg = TypeRegistration::of::<Projection>();
+    // reg.insert::<ReflectSerialize>(Viewport::default().clone_type_data());
+    // write.add_registration(reg);
+
+    let scene = DynamicScene::from_world(world, type_registry_arc);
+    let ser = scene.serialize_ron(type_registry_arc).unwrap();
+
+    std::fs::write(std::path::Path::new("./help-plz.ron"), ser).unwrap();
+    println!("saved");
 }
