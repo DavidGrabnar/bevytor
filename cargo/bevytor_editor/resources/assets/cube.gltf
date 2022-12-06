@@ -15,7 +15,7 @@
     "nodes" : [
         {
             "mesh" : 0,
-            "name" : "Cube"
+            "name" : "Main"
         }
     ],
     "materials" : [
@@ -36,7 +36,7 @@
     ],
     "meshes" : [
         {
-            "name" : "Cube",
+            "name" : "Main",
             "primitives" : [
                 {
                     "attributes" : {

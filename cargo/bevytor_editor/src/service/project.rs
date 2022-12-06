@@ -1,38 +1,44 @@
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
-use std::ffi::OsString;
-use std::{fs, io};
-use std::path::Path;
+use crate::error::{EResult, Error};
+use crate::{bail, World};
 use bevy::asset::{AssetServerSettings, FileAssetIo, HandleId};
 use bevy::prelude::*;
 use bevy::render::camera::{CameraProjection, Projection};
 use serde::ser::SerializeStruct;
-use crate::{bail, World};
-use crate::error::{EResult, Error};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::ffi::OsString;
+use std::path::Path;
+use std::{fs, io};
 
 const EDITOR_ROOT_FOLDER_PATH: &str = env!("CARGO_MANIFEST_DIR");
-const INITIAL_TEMPLATE_SCENE_PATH: &str = "resources/initial.ron";
+const INITIAL_TEMPLATE_SCENE_PATH: &str = "resources/initial.scn.ron";
+const INITIAL_TEMPLATE_ASSET_PATH: &str = "resources/initial.asset.ron";
+const INITIAL_ASSETS_PATH: &str = "resources/assets";
 
 #[derive(Default, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct ProjectDescription {
     pub name: String,
-    pub path: OsString
+    pub path: OsString,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ProjectState {
     pub scene_file: String,
+    pub asset_file: String,
+    pub assets_folder: String,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
 pub struct Project {
     pub project_description: ProjectDescription,
-    pub project_state: ProjectState
+    pub project_state: ProjectState,
 }
 
 impl Default for ProjectState {
     fn default() -> Self {
         Self {
-            scene_file: "scene.scn.ron".to_string(),
+            scene_file: "initial.scn.ron".to_string(),
+            asset_file: "initial.asset.ron".to_string(),
+            assets_folder: "assets".to_string(),
         }
     }
 }
@@ -79,7 +85,7 @@ impl Project {
     pub fn generate(description: ProjectDescription) -> EResult<Project> {
         let project = Project {
             project_description: description.clone(),
-            project_state: ProjectState::default()
+            project_state: ProjectState::default(),
         };
 
         if let Err(e) = Self::verify_new(description.path.clone()) {
@@ -91,7 +97,7 @@ impl Project {
         let project_path = Path::new(description.path.as_os_str());
         let serialized = match serde_json::to_string(&project) {
             Ok(result) => result,
-            Err(e) => bail!("PROJECT::BUILD::CANNOT_SERIALIZE_PROJECT", e)
+            Err(e) => bail!("PROJECT::BUILD::CANNOT_SERIALIZE_PROJECT", e),
         };
 
         if let Err(e) = fs::write(project_path.join("project.bv"), serialized) {
@@ -102,16 +108,69 @@ impl Project {
             bail!("PROJECT::BUILD::CANNOT_CREATE_SCENES_FOLDER", e);
         }
 
-        let template_path = Path::new(EDITOR_ROOT_FOLDER_PATH).join(INITIAL_TEMPLATE_SCENE_PATH);
+        let template_scene_path =
+            Path::new(EDITOR_ROOT_FOLDER_PATH).join(INITIAL_TEMPLATE_SCENE_PATH);
 
-        let template_content = match fs::read(template_path) {
+        let template_scene_content = match fs::read(template_scene_path) {
             Ok(result) => result,
-            Err(e) => bail!("PROJECT::BUILD::CANNOT_READ_SCENE_TEMPLATE_FILE", e)
+            Err(e) => bail!("PROJECT::BUILD::CANNOT_READ_SCENE_TEMPLATE_FILE", e),
         };
 
         // fs::copy fails for network mounted disks as it cannot copy permissions, solved by reading template + writing a new file
-        if let Err(e) = fs::write(project_path.join("scenes").join(project.project_state.scene_file.clone()), template_content) {
+        if let Err(e) = fs::write(
+            project_path
+                .join("scenes")
+                .join(project.project_state.scene_file.clone()),
+            template_scene_content,
+        ) {
             bail!("PROJECT::BUILD::CANNOT_WRITE_SCENE_TEMPLATE_FILE", e);
+        }
+
+        let template_asset_path =
+            Path::new(EDITOR_ROOT_FOLDER_PATH).join(INITIAL_TEMPLATE_ASSET_PATH);
+
+        let template_asset_content = match fs::read(template_asset_path) {
+            Ok(result) => result,
+            Err(e) => bail!("PROJECT::BUILD::CANNOT_READ_ASSET_TEMPLATE_FILE", e),
+        };
+
+        if let Err(e) = fs::write(
+            project_path
+                .join("scenes")
+                .join(project.project_state.asset_file.clone()),
+            template_asset_content,
+        ) {
+            bail!("PROJECT::BUILD::CANNOT_WRITE_ASSET_TEMPLATE_FILE", e);
+        }
+
+        if let Err(e) = fs::create_dir_all(
+            project_path
+                .join("scenes")
+                .join(project.project_state.assets_folder.clone()),
+        ) {
+            bail!("PROJECT::BUILD::CANNOT_CREATE_ASSETS_FOLDER", e);
+        }
+
+        match fs::read_dir(Path::new(EDITOR_ROOT_FOLDER_PATH).join(INITIAL_ASSETS_PATH)) {
+            Err(e) => bail!("PROJECT::BUILD::CANNOT_READ_ASSETS_FOLDER", e),
+            Ok(dir) => {
+                for entry in dir {
+                    match entry {
+                        Err(e) => bail!("PROJECT::BUILD::CANNOT_READ_ASSET", e),
+                        Ok(entry) => {
+                            if let Err(e) = fs::copy(
+                                entry.path(),
+                                project_path
+                                    .join("scenes")
+                                    .join(project.project_state.assets_folder.clone())
+                                    .join(entry.file_name()),
+                            ) {
+                                bail!("PROJECT::BUILD::CANNOT_WRITE_ASSET", e);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // TODO cleanup on error ?
@@ -127,12 +186,12 @@ impl Project {
         let project_path = Path::new(description.path.as_os_str());
         let serialized = match fs::read_to_string(project_path.join("project.bv")) {
             Ok(result) => result,
-            Err(e) => bail!("PROJECT::LOAD::CANNOT_READ_PROJECT_FILE", e)
+            Err(e) => bail!("PROJECT::LOAD::CANNOT_READ_PROJECT_FILE", e),
         };
 
         let project = match serde_json::from_str(&serialized) {
             Ok(result) => result,
-            Err(e) => bail!("PROJECT::LOAD::CANNOT_DESERIALIZE_PROJECT", e)
+            Err(e) => bail!("PROJECT::LOAD::CANNOT_DESERIALIZE_PROJECT", e),
         };
 
         Ok(project)
@@ -157,18 +216,31 @@ fn setup_template_scene() -> World {
     world.spawn().insert_bundle(camera);
 
     // plane
-    let bundle = setup_template_pbr_bundle(&mut world, Mesh::from(shape::Plane { size: 5.0 }), Color::rgb(0.3, 0.5, 0.3), Transform::default());
+    let bundle = setup_template_pbr_bundle(
+        &mut world,
+        Mesh::from(shape::Plane { size: 5.0 }),
+        Color::rgb(0.3, 0.5, 0.3),
+        Transform::default(),
+    );
     world.spawn().insert_bundle(bundle);
     // cube
-    let bundle = setup_template_pbr_bundle(&mut world, Mesh::from(shape::Cube { size: 1.0 }), Color::rgb(0.8, 0.7, 0.6), Transform::from_xyz(0.0, 0.5, 0.0));
-    let cube =
-        world
-            .spawn().insert_bundle(bundle)
-            .id();
+    let bundle = setup_template_pbr_bundle(
+        &mut world,
+        Mesh::from(shape::Cube { size: 1.0 }),
+        Color::rgb(0.8, 0.7, 0.6),
+        Transform::from_xyz(0.0, 0.5, 0.0),
+    );
+    let cube = world.spawn().insert_bundle(bundle).id();
     // child cube
-    let bundle = setup_template_pbr_bundle(&mut world, Mesh::from(shape::Cube { size: 1.0 }), Color::rgb(0.6, 0.7, 0.8), Transform::from_xyz(0.0, 1.0, 0.0));
+    let bundle = setup_template_pbr_bundle(
+        &mut world,
+        Mesh::from(shape::Cube { size: 1.0 }),
+        Color::rgb(0.6, 0.7, 0.8),
+        Transform::from_xyz(0.0, 1.0, 0.0),
+    );
     world
-        .spawn().insert_bundle(bundle)
+        .spawn()
+        .insert_bundle(bundle)
         .insert(Children::with(&[cube]));
     // light
     world.spawn().insert_bundle(PointLightBundle {
@@ -179,10 +251,21 @@ fn setup_template_scene() -> World {
     world
 }
 
-fn setup_template_pbr_bundle(world: &mut World, mesh: Mesh, color: Color, transform: Transform) -> PbrBundle {
+fn setup_template_pbr_bundle(
+    world: &mut World,
+    mesh: Mesh,
+    color: Color,
+    transform: Transform,
+) -> PbrBundle {
     PbrBundle {
-        mesh: world.get_resource_mut::<ResMut<Assets<Mesh>>>().unwrap().add(mesh),
-        material: world.get_resource_mut::<ResMut<Assets<StandardMaterial>>>().unwrap().add(color.into()),
+        mesh: world
+            .get_resource_mut::<ResMut<Assets<Mesh>>>()
+            .unwrap()
+            .add(mesh),
+        material: world
+            .get_resource_mut::<ResMut<Assets<StandardMaterial>>>()
+            .unwrap()
+            .add(color.into()),
         transform,
         ..Default::default()
     }

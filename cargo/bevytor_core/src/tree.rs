@@ -1,7 +1,6 @@
-use std::fmt::{Debug, Formatter, Write};
 use bevy::prelude::Entity;
-use bevy::reflect::erased_serde::private::serde::Serializer;
 use bevy_egui::egui::{CollapsingHeader, Ui};
+use std::fmt::{Debug, Formatter, Write};
 
 pub enum Action {
     NoAction,
@@ -30,7 +29,6 @@ impl Debug for Tree {
 #[derive(Clone, Default)]
 pub struct Node(Option<Entity>, pub(crate) Vec<Node>);
 
-
 impl Debug for Node {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(format!("{}", self.0.map(|e| e.id()).unwrap_or(0)).as_str())?;
@@ -49,27 +47,29 @@ impl Node {
     fn ui(&self, ui: &mut Ui) -> Action {
         let name = match self.0 {
             Some(entity) => entity.id().to_string(),
-            None => "Scene".to_string()
+            None => "Scene".to_string(),
         };
 
         let collapsible = CollapsingHeader::new(name)
-            .id_source(self.0.map(|entity| format!("{}", entity.id())).unwrap_or_else(|| "0".to_string()))
+            .id_source(
+                self.0
+                    .map(|entity| format!("{}", entity.id()))
+                    .unwrap_or_else(|| "0".to_string()),
+            )
             .selectable(self.0.is_some());
 
         let response = collapsible.show(ui, |ui| {
             let button_response = match self.0 {
                 Some(_entity) => Some(ui.button("Inspect")),
-                None => None
+                None => None,
             };
-            let children_response = self.1
-                .iter()
-                .fold(Action::NoAction, |curr_action, child| {
-                    let action = child.ui(ui);
-                    if let Action::Selected(_entity) = action {
-                        return action;
-                    }
-                    curr_action
-                });
+            let children_response = self.1.iter().fold(Action::NoAction, |curr_action, child| {
+                let action = child.ui(ui);
+                if let Action::Selected(_entity) = action {
+                    return action;
+                }
+                curr_action
+            });
 
             if let Action::Selected(_entity) = children_response {
                 return children_response;

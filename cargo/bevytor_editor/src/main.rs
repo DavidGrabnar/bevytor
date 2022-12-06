@@ -4,19 +4,24 @@ mod service;
 mod error;
 mod ui;
 
+use crate::plugin::EditorPlugin;
+use bevy::asset::HandleId;
+use bevy::prelude::*;
+use bevy::reflect::{
+    FromType, TypeData, TypeInfo, TypeRegistration, TypeRegistry, TypeRegistryArc,
+};
+use bevy::render::camera::{
+    CameraProjection, DepthCalculation, Projection, ScalingMode, Viewport, WindowOrigin,
+};
+use bevy::scene::serialize_ron;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 use std::any::Any;
 use std::fs;
 use std::ops::Deref;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
-use bevy::asset::HandleId;
-use bevy::prelude::*;
-use bevy::reflect::{FromType, TypeData, TypeInfo, TypeRegistration, TypeRegistry, TypeRegistryArc};
-use bevy::render::camera::{CameraProjection, DepthCalculation, Projection, ScalingMode, Viewport, WindowOrigin};
-use crate::plugin::EditorPlugin;
-use serde::{Serialize, Deserialize, Serializer};
-use serde::ser::SerializeStruct;
 // use bevytor_spy::plugin::SpyPlugin;
 
 use systems_hot::*;
@@ -33,10 +38,17 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugin(EditorPlugin::default())
         // .add_system(test_hot_system)
-        // .add_startup_system(setup_scene) // TEST
+        .add_startup_system(setup_scene) // TEST
         // .add_system(bonk.exclusive_system())
         // .add_system(honk.exclusive_system())
         .run();
+}
+
+#[derive(Eq, PartialEq, Hash, Serialize, Deserialize)]
+struct AssetEntry {
+    filename: String,
+    type_uuid: String,
+    uid: u64,
 }
 
 #[derive(Component, Reflect)]
@@ -47,35 +59,35 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // plane
-    commands.spawn_bundle(PbrBundle {
-        mesh: meshes.add(Mesh::from(shape::Plane { size: 5.0 })),
-        material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
-        ..Default::default()
-    });
-    // cube
-    let cube = commands
-        .spawn_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
-            material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
-            transform: Transform::from_xyz(0.0, 0.5, 0.0),
-            ..Default::default()
-        })
-        .id();
-    // child cube
-    commands
-        .spawn_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
-            material: materials.add(Color::rgb(0.6, 0.7, 0.8).into()),
-            transform: Transform::from_xyz(0.0, 1.0, 0.0),
-            ..Default::default()
-        })
-        .add_child(cube);
-    // light
-    commands.spawn_bundle(PointLightBundle {
-        transform: Transform::from_xyz(3.0, 8.0, 5.0),
-        ..Default::default()
-    });
+    // // plane
+    // commands.spawn_bundle(PbrBundle {
+    //     mesh: meshes.add(Mesh::from(shape::Plane { size: 5.0 })),
+    //     material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
+    //     ..Default::default()
+    // });
+    // // cube
+    // let cube = commands
+    //     .spawn_bundle(PbrBundle {
+    //         mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
+    //         material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
+    //         transform: Transform::from_xyz(0.0, 0.5, 0.0),
+    //         ..Default::default()
+    //     })
+    //     .id();
+    // // child cube
+    // commands
+    //     .spawn_bundle(PbrBundle {
+    //         mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
+    //         material: materials.add(Color::rgb(0.6, 0.7, 0.8).into()),
+    //         transform: Transform::from_xyz(0.0, 1.0, 0.0),
+    //         ..Default::default()
+    //     })
+    //     .add_child(cube);
+    // // light
+    // commands.spawn_bundle(PointLightBundle {
+    //     transform: Transform::from_xyz(3.0, 8.0, 5.0),
+    //     ..Default::default()
+    // });
 
     // camera
     /*commands.spawn_bundle(Camera3dBundle {
@@ -88,6 +100,22 @@ fn setup_scene(
         ..default()
     })
         .insert(SkipSerialization);*/
+
+    let asset_entries: Vec<AssetEntry> = vec![
+        AssetEntry {
+            filename: "cube.gltf".to_string(),
+            type_uuid: "8ecbac0f-f545-4473-ad43-e1f4243af51e".to_string(),
+            uid: 14997970011285428877,
+        },
+        AssetEntry {
+            filename: "cube.gltf".to_string(),
+            type_uuid: "8ecbac0f-f545-4473-ad43-e1f4243af51e".to_string(),
+            uid: 9274126780494902850,
+        },
+    ];
+
+    let result = serialize_ron(asset_entries).unwrap();
+    fs::write(Path::new("./test-asset-entries.ron"), result).unwrap();
 }
 
 fn bonk(world: &mut World) {
@@ -95,11 +123,17 @@ fn bonk(world: &mut World) {
     sleep(Duration::from_secs(2));
     println!("sleep");
     let type_registry_arc = world.resource::<TypeRegistry>();
-    type_registry_arc.write().register::<std::borrow::Cow<str>>();
+    type_registry_arc
+        .write()
+        .register::<std::borrow::Cow<str>>();
     // type_registry_arc.write().register::<Projection>();
     type_registry_arc.write().register::<Option<Viewport>>();
-    type_registry_arc.write().register_type_data::<Option<Viewport>, ReflectSerialize>();
-    type_registry_arc.write().register_type_data::<Option<Viewport>, ReflectDeserialize>();
+    type_registry_arc
+        .write()
+        .register_type_data::<Option<Viewport>, ReflectSerialize>();
+    type_registry_arc
+        .write()
+        .register_type_data::<Option<Viewport>, ReflectDeserialize>();
 
     let mut scene = DynamicScene::from_world(world, type_registry_arc);
 
@@ -129,7 +163,6 @@ fn bonk(world: &mut World) {
     fs::write(Path::new("/home/grabn/projects/bevytor/banana.ron"), ser).unwrap();
     println!("saved");
 }
-
 
 fn honk(meshes_res: Res<Assets<Mesh>>) {
     println!("before");
