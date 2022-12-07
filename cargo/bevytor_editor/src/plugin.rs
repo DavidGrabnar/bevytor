@@ -65,17 +65,6 @@ pub trait Widget {
 #[derive(Default)]
 struct Test(u8);
 
-#[derive(Eq, PartialEq, Hash, Serialize, Deserialize, Debug, Clone)]
-struct AssetEntry {
-    filename: String,
-    type_uuid: String,
-    uid: u64,
-    // #[serde(skip_serializing, skip_deserializing)]
-    // gltf_handle: Option<Handle<Gltf>>,
-    // #[serde(skip_serializing, skip_deserializing)]
-    // asset_handle: Option<Handle<Mesh>>, // TODO make dynamic
-}
-
 struct InspectRegistry {
     impls: HashMap<TypeId, Box<fn(&mut dyn Any, &mut egui::Ui, &mut Context) -> ()>>,
     skipped: HashSet<TypeId>,
@@ -483,21 +472,34 @@ struct LoadProject(Project);
 struct SelectEntity(Entity);
 
 #[derive(Deref, Debug)]
-struct LoadAsset(AssetEntry);
+struct LoadAsset(AssetSource);
 
-#[derive(Debug)]
-struct AttachAsset {
-    entry: AssetEntry,
-    gltf_handle: Handle<Gltf>,
+
+#[derive(Eq, PartialEq, Hash, Serialize, Deserialize, Debug, Clone)]
+struct AssetSource {
+    filename: String,
+    type_uuid: String,
+    uid: u64,
+    // #[serde(skip_serializing, skip_deserializing)]
+    // gltf_handle: Option<Handle<Gltf>>,
+    // #[serde(skip_serializing, skip_deserializing)]
+    // asset_handle: Option<Handle<Mesh>>, // TODO make dynamic
 }
 
-enum GltfAsset {
+#[derive(Debug, Clone)]
+struct AssetEntry {
+    source: AssetSource,
+    original: Handle<Mesh>,
+    attached: Option<Handle<Mesh>>
+}
+
+enum GltfAssetHandle {
     Mesh(Handle<Mesh>),
     Material(Handle<StandardMaterial>)
 }
 
 #[derive(Default, Deref, DerefMut)]
-struct AssetManagement(Vec<(AssetEntry, Handle<Gltf>, GltfAsset)>);
+struct AssetManagement(Vec<AssetEntry>);
 
 #[derive(Eq, PartialEq, Hash)]
 enum UiReference {
@@ -529,7 +531,6 @@ impl Plugin for EditorPlugin {
             .add_event::<LoadProject>()
             .add_event::<SelectEntity>()
             .add_event::<LoadAsset>()
-            .add_event::<AttachAsset>()
             .add_plugin(EguiPlugin)
             .add_startup_system(get_editor_state)
             // Ensure order of UI systems execution!
@@ -844,7 +845,7 @@ fn load_project(
             project_scene_path, project_asset_path
         );
 
-        let asset_entries: Vec<AssetEntry> = ron::from_str(
+        let asset_entries: Vec<AssetSource> = ron::from_str(
             std::fs::read_to_string(project_asset_path)
                 .unwrap()
                 .as_str(),
@@ -935,67 +936,70 @@ fn select_entity(
 
 fn load_assets(
     mut ev_load_assets: EventReader<LoadAsset>,
-    mut ev_attach_assets: EventWriter<AttachAsset>,
     asset_server: Res<AssetServer>,
     editor_state: ResMut<EditorState>,
+    mut asset_management: ResMut<AssetManagement>,
 ) {
     if let Some(project) = editor_state.current_project.as_ref() {
-        for entry in ev_load_assets.iter() {
-            println!(
+        for source in ev_load_assets.iter() {
+            info!(
                 "new asset requested {:?} - will load",
-                entry,
+                source,
             );
             let asset_path = Path::new(project.project_description.path.as_os_str())
                 .join("scenes")
                 .join(project.project_state.assets_folder.clone())
-                .join(entry.filename.clone());
+                .join(source.filename.clone());
 
-            let master_asset = asset_server.load(asset_path);
-
-            ev_attach_assets.send(AttachAsset { entry: entry.0.clone(), gltf_handle: master_asset });
-            println!(
-                "new asset loaded {:?} - sent for attach",
-                entry,
-            );
+            let full = asset_path.to_str().unwrap().to_owned() + "#Mesh0/Primitive0";
+            let handle = asset_server.load(&full);
+            asset_management.push(AssetEntry{source: source.0.clone(), original: handle, attached: None});
         }
     }
 }
 
 fn attach_assets(
-    mut ev_attach_assets: EventReader<AttachAsset>,
-    mut gltfs: ResMut<Assets<Gltf>>,
-    mut gltf_meshes: ResMut<Assets<GltfMesh>>,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut asset_management: ResMut<AssetManagement>,
 ) {
-    for event in ev_attach_assets.iter() {
-        let entry = &event.entry;
-        if let Some(gltf) = gltfs.get(&event.gltf_handle) {
-            // TODO How to determine what to take? Enum for type, which also contains type UUID ?
-            if let Some(gltf_mesh_handle) = &gltf.named_meshes.get("Main") {
-                if let Some(gltf_mesh) = gltf_meshes.get(gltf_mesh_handle) {
-                    if let Some(primitive) = gltf_mesh.primitives.first() {
-                        let mut clone = None;
-                        if let Some(mesh) = meshes.get(&primitive.mesh) {
-                            clone = Some(mesh.clone());
-                        }
-                        if let Some(mesh) = clone {
-                            let new_handle = meshes.set(
-                                HandleId::Id(
-                                    Uuid::from_str(entry.type_uuid.as_str()).unwrap(),
-                                    entry.uid,
-                                ),
-                                mesh,
-                            );
-                            asset_management.push((entry.clone(), event.gltf_handle.clone(), GltfAsset::Mesh(new_handle)));
-                            println!(
-                                "new asset attached {:?} - done processing",
-                                entry.clone(),
-                            );
-                        }
-                    }
+    use bevy::asset::LoadState;
+
+    for mut entry in asset_management.0.iter_mut() {
+        if entry.attached.is_some() {
+            // already attached
+            continue;
+        }
+
+        match asset_server.get_load_state(&entry.original) {
+            LoadState::NotLoaded => {/*do nothing*/}
+            LoadState::Loading => {/*do nothing*/}
+            LoadState::Loaded => {
+                let mut clone = None;
+                if let Some(mesh) = meshes.get(&entry.original) {
+                    clone = Some(mesh.clone());
+                }
+                if let Some(mesh) = clone {
+                    let new_handle = meshes.set(
+                        HandleId::Id(
+                            Uuid::from_str(entry.source.type_uuid.as_str()).unwrap(),
+                            entry.source.uid,
+                        ),
+                        mesh.clone(),
+                    );
+                    entry.attached = Some(new_handle);
+                    println!(
+                        "new asset attached {:?} - done processing",
+                        entry,
+                    );
+                } else {
+                    error!("No asset for entry {:?}", entry)
                 }
             }
+            LoadState::Failed => {
+                error!("Failed to load asset for entry {:?}", entry)
+            }
+            LoadState::Unloaded => {/*do nothing*/}
         }
     }
 }

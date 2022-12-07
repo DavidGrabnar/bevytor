@@ -1,7 +1,8 @@
-use std::borrow::Cow;
 use bevy::prelude::*;
 use bevy::reflect::{FromType, TypeData, TypeRegistration, TypeRegistryArc};
 use bevy::render::camera::{Projection, Viewport};
+use bevy::scene::serialize_ron;
+use std::borrow::Cow;
 
 fn main() {
     App::new()
@@ -15,9 +16,7 @@ fn main() {
         .run();
 }
 
-fn setup_scene(
-    mut commands: Commands
-) {
+fn setup_scene(mut commands: Commands) {
     commands.spawn_bundle(Camera3dBundle::default());
 }
 
