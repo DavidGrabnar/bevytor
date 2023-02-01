@@ -5,23 +5,24 @@ General TODOs:
 
 use crate::error::{EResult, Error};
 use crate::service::existing_projects::ExistingProjects;
-use crate::service::project::Project;
-use crate::ui::file_explorer::show_ui_file_editor;
+use crate::service::project::{Project, ProjectDescription};
+use crate::ui::file_explorer::{explorer_row, show_ui_file_editor};
 use crate::ui::project::{project_list, ProjectListAction};
 use crate::{bail, TypeRegistry};
 use bevy::asset::{Asset, HandleId, SourceMeta};
 use bevy::ecs::archetype::Archetypes;
 use bevy::ecs::component::Components;
-use bevy::ecs::entity::Entities;
+use bevy::ecs::entity::{Entities, EntityMap};
+use bevy::ecs::schedule::IntoRunCriteria;
 use bevy::ecs::world::EntityRef;
 use bevy::gltf::{Gltf, GltfMesh, GltfPrimitive};
 use bevy::prelude::*;
 use bevy::reflect::erased_serde::deserialize;
-use bevy::reflect::{ReflectMut, TypeRegistryArc, TypeUuid};
+use bevy::reflect::{List, ReflectMut, TypeRegistryArc, TypeUuid};
 use bevy::render::camera::{CameraProjection, Projection};
 use bevy::render::mesh::{Indices, MeshVertexAttributeId, VertexAttributeValues};
 use bevy::utils::Uuid;
-use bevy_egui::egui::{Checkbox, Grid, Ui};
+use bevy_egui::egui::{Checkbox, CollapsingHeader, Grid, TextBuffer, Ui};
 use bevy_egui::{egui, EguiContext, EguiPlugin};
 use bevytor_core::tree::{Action, Tree};
 use bevytor_core::{
@@ -33,8 +34,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::any;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
+use std::env::home_dir;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use sysinfo::{DiskExt, RefreshKind, SystemExt};
 
 pub struct EditorPlugin {
     widgets: Vec<Box<dyn Widget + Sync + Send>>,
@@ -48,26 +52,51 @@ impl Default for EditorPlugin {
     }
 }
 
-#[derive(Default)]
+#[derive(Resource)]
 pub struct EditorState {
     // TODO re/load existing projects only when needed: on start, window opened, new project opened/created
     existing_projects: ExistingProjects,
     current_file_explorer_path: PathBuf,
     current_project: Option<Project>,
     tree: Tree,
+    new_project_popup_shown: bool,
+    new_project_name: String,
+    new_project_path: String,
+    system_info: sysinfo::System,
 }
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self {
+            existing_projects: Default::default(),
+            current_file_explorer_path: Default::default(),
+            current_project: None,
+            tree: Default::default(),
+            new_project_popup_shown: false,
+            new_project_name: "".to_string(),
+            new_project_path: "".to_string(),
+            system_info: sysinfo::System::new_with_specifics(RefreshKind::new().with_disks_list()),
+        }
+    }
+}
+
+#[derive(Component)]
+struct SceneRoot {}
 
 pub trait Widget {
     fn show_ui(&self, ui: &mut Ui);
     fn update_state(&self);
 }
 
-#[derive(Default)]
-struct Test(u8);
-
+#[derive(Resource)]
 struct InspectRegistry {
     impls: HashMap<TypeId, Box<fn(&mut dyn Any, &mut egui::Ui, &mut Context) -> ()>>,
     skipped: HashSet<TypeId>,
+}
+
+#[derive(Resource, Default)]
+struct ForceKeep {
+    standard_materials: Vec<Handle<StandardMaterial>>,
 }
 
 impl Default for InspectRegistry {
@@ -149,6 +178,9 @@ impl InspectRegistry {
                 ReflectMut::Value(val) => {
                     todo!("WIP {}", value.type_name());
                     bail!("INSPECT_REGISTRY::EXEC::IMPL_NOT_FOUND");
+                }
+                ReflectMut::Enum(_) => {
+                    todo!("WIP {}", value.type_name())
                 }
             }
             // println!("NOTFOUND {:?}", type_id);
@@ -468,12 +500,16 @@ impl Widget for Hierarchy {
 }
 
 struct LoadProject(Project);
+struct SaveProject();
+struct LoadScene(Handle<DynamicScene>);
+
+#[derive(Resource, Default)]
+struct LoadSceneFlag(Option<Handle<DynamicScene>>);
 
 struct SelectEntity(Entity);
 
 #[derive(Deref, Debug)]
 struct LoadAsset(AssetSource);
-
 
 #[derive(Eq, PartialEq, Hash, Serialize, Deserialize, Debug, Clone)]
 struct AssetSource {
@@ -490,15 +526,15 @@ struct AssetSource {
 struct AssetEntry {
     source: AssetSource,
     original: Handle<Mesh>,
-    attached: Option<Handle<Mesh>>
+    attached: Option<Handle<Mesh>>,
 }
 
 enum GltfAssetHandle {
     Mesh(Handle<Mesh>),
-    Material(Handle<StandardMaterial>)
+    Material(Handle<StandardMaterial>),
 }
 
-#[derive(Default, Deref, DerefMut)]
+#[derive(Default, Deref, DerefMut, Resource)]
 struct AssetManagement(Vec<AssetEntry>);
 
 #[derive(Eq, PartialEq, Hash)]
@@ -508,7 +544,7 @@ enum UiReference {
     FileExplorer,
 }
 
-#[derive(Default)]
+#[derive(Resource, Default)]
 struct UiRegistry {
     registry: HashMap<UiReference, &'static mut egui::Ui>,
 }
@@ -524,13 +560,14 @@ impl Plugin for EditorPlugin {
         app.init_resource::<AssetManagement>()
             .init_resource::<InspectRegistry>()
             .init_resource::<EditorState>()
-            .init_resource::<Vec<Handle<Mesh>>>()
-            .init_resource::<Vec<Handle<StandardMaterial>>>()
+            .init_resource::<ForceKeep>()
             .init_resource::<UiRegistry>()
-            .init_resource::<Test>()
+            .init_resource::<LoadSceneFlag>()
             .add_event::<LoadProject>()
-            .add_event::<SelectEntity>()
+            .add_event::<LoadScene>()
             .add_event::<LoadAsset>()
+            .add_event::<SaveProject>()
+            .add_event::<SelectEntity>()
             .add_plugin(EguiPlugin)
             .add_startup_system(get_editor_state)
             // Ensure order of UI systems execution!
@@ -541,10 +578,13 @@ impl Plugin for EditorPlugin {
             //     .with_system(ui_file_explorer.after(ui_inspect))
             //     .with_system(ui_project_management.after(ui_file_explorer))
             // )
-            .add_system(ui_inspect.exclusive_system())
+            .add_system(ui_inspect)
             .add_system(load_project)
-            .add_system(select_entity)
+            .add_system(load_scene_proxy)
+            .add_system(load_scene)
             .add_system(load_assets)
+            .add_system(save_project)
+            .add_system(select_entity)
             .add_system(attach_assets)
             // .add_system(update_ui_registry)
             .add_system(system_update_state_hierarchy);
@@ -555,10 +595,7 @@ impl Plugin for EditorPlugin {
     }
 }
 
-fn ui_menu(
-    mut egui_context: ResMut<EguiContext>,
-    mut ev_load_asset: EventWriter<LoadAsset>,
-) {
+fn ui_menu(mut egui_context: ResMut<EguiContext>, mut ev_load_asset: EventWriter<LoadAsset>) {
     egui::TopBottomPanel::top("menu_bar").show(egui_context.ctx_mut(), |ui| {
         egui::menu::bar(ui, |ui| {
             ui.menu_button("File", |ui| {
@@ -585,7 +622,7 @@ fn ui_menu(
 }
 
 // TODO fix to immutable state & handle mut via events
-fn ui_project_management(
+/*fn ui_project_management(
     mut egui_context: ResMut<EguiContext>,
     mut editor_state: ResMut<EditorState>,
     mut ev_load_project: EventWriter<LoadProject>,
@@ -598,7 +635,22 @@ fn ui_project_management(
                 let res = project_list(ui, &editor_state.existing_projects).unwrap();
                 if let Some(action) = res {
                     match action {
-                        ProjectListAction::Create(description) => {
+                        ProjectListAction::Create => {
+                            /*Window::new("Select new project directory")
+                            .open(open)
+                            .resizable(false)
+                            .show(ctx, |ui| {
+                                use super::View as _;
+                                self.ui(ui);
+                            });*/
+
+                            // TODO show panel with name and location select - file explorer with folder filter, project folder name is slug of project name (can be modified)
+                            let path = OsString::from(
+                                "C:\\Users\\grabn\\Documents\\Faks\\bevytor\\das_demo",
+                            );
+                            let name = "Das demo".to_string();
+                            Project::verify_new(path.clone()).unwrap();
+                            let description = ProjectDescription { name, path };
                             Project::generate(description.clone()).unwrap();
                             editor_state
                                 .existing_projects
@@ -623,8 +675,8 @@ fn ui_project_management(
                 };
             });
     }
-}
-
+}*/
+/*
 fn ui_hierarchy(
     mut egui_context: ResMut<EguiContext>,
     editor_state: Res<EditorState>,
@@ -646,7 +698,7 @@ fn ui_file_explorer(mut egui_context: ResMut<EguiContext>, editor_state: Res<Edi
             show_ui_file_editor(ui, editor_state.current_file_explorer_path.as_path()).unwrap();
         }
     });
-}
+}*/
 
 fn ui_inspect(
     world: &mut World,
@@ -675,6 +727,10 @@ fn ui_inspect(
                         *ui.ctx().memory() = Default::default();
                         ui.close_menu();
                     }
+                    if ui.button("Save project").clicked() {
+                        world.send_event(SaveProject());
+                        ui.close_menu();
+                    }
                 });
             });
         });
@@ -700,7 +756,13 @@ fn ui_inspect(
                 //
                 let mut component_type_ids = Vec::new();
                 for archetype in world.archetypes().iter() {
-                    if archetype.entities().contains(&entity) {
+                    let mut found = false;
+                    for archetype_entity in archetype.entities() {
+                        if archetype_entity.entity() == entity {
+                            found = true;
+                        }
+                    }
+                    if found {
                         for component_id in archetype.components() {
                             let comp_info = world.components().get_info(component_id).unwrap();
                             component_type_ids
@@ -722,7 +784,7 @@ fn ui_inspect(
                 }
 
                 world.resource_scope(|world, inspect_registry: Mut<InspectRegistry>| {
-                    world.resource_scope(|world, type_registry_arc: Mut<TypeRegistryArc>| {
+                    world.resource_scope(|world, type_registry_arc: Mut<AppTypeRegistry>| {
                         // let mut entity_mut = world.entity_mut(entity);
                         for (component_type_id, component_name) in component_type_ids {
                             // TODO is this even possible ???
@@ -778,15 +840,12 @@ fn ui_inspect(
                         let res = project_list(ui, &editor_state.existing_projects).unwrap();
                         if let Some(action) = res {
                             match action {
-                                ProjectListAction::Create(description) => {
-                                    Project::generate(description.clone()).unwrap();
-                                    editor_state
-                                        .existing_projects
-                                        .add(description.clone())
-                                        .unwrap();
-                                    world.send_event(LoadProject(
-                                        Project::load(description).unwrap(),
-                                    ));
+                                ProjectListAction::Create => {
+                                    editor_state.new_project_popup_shown = true;
+                                    editor_state.new_project_name = "Project".to_string();
+                                    let home_dir = dirs::home_dir().unwrap();
+                                    editor_state.new_project_path =
+                                        home_dir.to_str().unwrap().to_string();
                                 }
                                 ProjectListAction::NewOpen(description) => {
                                     editor_state
@@ -808,6 +867,97 @@ fn ui_inspect(
                             }
                         };
                     });
+
+                if editor_state.new_project_popup_shown {
+                    // TODO default path
+                    let home_dir = dirs::home_dir().unwrap();
+                    let desktop_dir = dirs::desktop_dir().unwrap();
+                    egui::Window::new("Create new project")
+                        .collapsible(false)
+                        .show(egui_context.ctx_mut(), |ui| {
+                            // TODO as grid
+                            // TODO set location final folder to name as slug, if location not yet modified!
+                            ui.horizontal(|ui| {
+                                ui.label("Name");
+                                // TODO fix text edit
+                                ui.add(egui::TextEdit::singleline(
+                                    &mut editor_state.new_project_name,
+                                ));
+                            });
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label("Location");
+                                // TODO must sync with file explorer
+                                ui.add_enabled(
+                                    true,
+                                    egui::TextEdit::singleline(&mut editor_state.new_project_path),
+                                );
+                                //ui.text_edit_singleline(&mut path);
+                            });
+                            /*ui.horizontal(|ui| {
+                                // TODO - fix icons
+                                if ui.button("➕").clicked() {
+                                    // TODO update tree
+                                    editor_state.new_project_path =
+                                        home_dir.to_str().unwrap().to_string();
+                                }
+                                if ui.button("➕").clicked() {
+                                    // TODO update tree
+                                    editor_state.new_project_path =
+                                        desktop_dir.to_str().unwrap().to_string();
+                                }
+                                if ui.button("➕").clicked() {
+                                    // TODO new folder
+                                }
+                                if ui.button("➕").clicked() {
+                                    // TODO delete folder
+                                }
+                                if ui.button("➕").clicked() {
+                                    // TODO refresh
+                                }
+                                if ui.button("➕").clicked() {
+                                    // TODO show hidden folders
+                                }
+                            });
+                            ui.separator();
+                            // TODO background for file explorer
+                            egui::ScrollArea::vertical()
+                                .max_height(300.0)
+                                .show(ui, |ui| {
+                                    ui.vertical(|ui| {
+                                        for disk in editor_state.system_info.disks() {
+                                            let root = disk.mount_point().to_str().unwrap();
+                                            explorer_row(
+                                                ui,
+                                                root,
+                                                editor_state.new_project_path.as_str(),
+                                            );
+                                        }
+                                    });
+                                }); */
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                if ui.button("Cancel").clicked() {
+                                    editor_state.new_project_popup_shown = false;
+                                }
+                                if ui.button("Create").clicked() {
+                                    let path =
+                                        OsString::from(editor_state.new_project_path.as_str());
+                                    let name = editor_state.new_project_name.clone();
+                                    Project::verify_new(path.clone()).unwrap();
+                                    let description = ProjectDescription { name, path };
+                                    Project::generate(description.clone()).unwrap();
+                                    editor_state
+                                        .existing_projects
+                                        .add(description.clone())
+                                        .unwrap();
+                                    world.send_event(LoadProject(
+                                        Project::load(description).unwrap(),
+                                    ));
+                                }
+                            });
+                        });
+                }
             }
         });
     });
@@ -828,8 +978,9 @@ fn load_project(
     mut ev_load_project: EventReader<LoadProject>,
     asset_server: Res<AssetServer>,
     mut ev_load_asset: EventWriter<LoadAsset>,
+    mut ev_load_scene: EventWriter<LoadScene>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut materials_force_keep: ResMut<Vec<Handle<StandardMaterial>>>,
+    mut force_keep: ResMut<ForceKeep>,
 ) {
     // Only take one instance of LoadProject event - multiple events should not happen
     if let Some(event) = ev_load_project.iter().next() {
@@ -850,7 +1001,7 @@ fn load_project(
                 .unwrap()
                 .as_str(),
         )
-            .unwrap();
+        .unwrap();
 
         println!("{:?}", asset_entries);
 
@@ -858,13 +1009,15 @@ fn load_project(
             ev_load_asset.send(LoadAsset(entry));
         }
 
-        commands.spawn_bundle(DynamicSceneBundle {
+        ev_load_scene.send(LoadScene(asset_server.load(project_scene_path)));
+
+        /*commands.spawn(DynamicSceneBundle {
             scene: asset_server.load(project_scene_path),
             ..default()
-        });
+        });*/
         // TODO serialize camera
         // Manually add a camera as it cannot be serialized at the moment ... No idea why, try when serialization update is released
-        commands.spawn_bundle(Camera3dBundle {
+        /*commands.spawn_bundle(Camera3dBundle {
             projection: Projection::Orthographic(OrthographicProjection {
                 // Why so small scale?
                 scale: 0.01,
@@ -872,7 +1025,7 @@ fn load_project(
             }),
             transform: Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
-        });
+        });*/
 
         // TODO dynamically load resources
         let _handle_material1 = materials.set(
@@ -897,9 +1050,9 @@ fn load_project(
             Color::rgb(0.6, 0.7, 0.8).into(),
         );
 
-        materials_force_keep.push(_handle_material1);
-        materials_force_keep.push(_handle_material2);
-        materials_force_keep.push(_handle_material3);
+        force_keep.standard_materials.push(_handle_material1);
+        force_keep.standard_materials.push(_handle_material2);
+        force_keep.standard_materials.push(_handle_material3);
 
         let project: Project = event.0.clone();
         editor_state.current_file_explorer_path =
@@ -912,6 +1065,39 @@ fn load_project(
     }
 }
 
+fn save_project(
+    world: &World,
+    mut ev_save_project: EventReader<SaveProject>,
+    type_registry: Res<AppTypeRegistry>,
+) {
+    // Only take one instance of LoadProject event - multiple events should not happen
+    if let Some(event) = ev_save_project.iter().next() {
+        if let Some(project) = &world.resource::<EditorState>().current_project {
+            let project_scene_path = Path::new(project.project_description.path.as_os_str())
+                .join("scenes")
+                .join(project.project_state.scene_file.clone());
+
+            let project_asset_path = Path::new(project.project_description.path.as_os_str())
+                .join("scenes")
+                .join(project.project_state.asset_file.clone());
+            println!(
+                "SAVE PROJECT {:?} - {:?}",
+                project_scene_path, project_asset_path
+            );
+
+            //let type_registry = type_registry.read();
+            let scene = DynamicScene::from_world(world, &type_registry);
+            let ser = scene.serialize_ron(&type_registry).unwrap();
+
+            std::fs::write(project_scene_path, ser).unwrap();
+        }
+    }
+
+    if ev_save_project.iter().next().is_some() {
+        warn!("Multiple SaveProject events found in listener! Should not happen");
+    }
+}
+
 fn select_entity(
     mut commands: Commands,
     mut ev_select_entity: EventReader<SelectEntity>,
@@ -919,19 +1105,50 @@ fn select_entity(
 ) {
     // Only take one instance of SelectEntity event - multiple events should not happen
     if let Some(event) = ev_select_entity.iter().next() {
-        println!("Select!!!!!!!");
         // Remove old selected
         if let Ok(entity) = existing_selected.get_single_mut() {
             commands.entity(entity).remove::<SelectedEntity>();
-        } else {
-            // TODO else is temporary for debug
-            commands.entity(event.0).insert(SelectedEntity);
         }
+        commands.entity(event.0).insert(SelectedEntity);
     }
 
     if ev_select_entity.iter().next().is_some() {
         warn!("Multiple SelectEntity events found in listener! Should not happen");
     }
+}
+
+// TODO use event listener in load_scene system
+// currently I cannot retrieve listener from world
+// temporarily replaced with resource option of event contents
+fn load_scene_proxy(
+    mut ev_load_scene: EventReader<LoadScene>,
+    mut load_scene_flag: ResMut<LoadSceneFlag>,
+) {
+    if let Some(event) = ev_load_scene.iter().next() {
+        load_scene_flag.0 = Some(event.0.clone())
+    }
+    if ev_load_scene.iter().next().is_some() {
+        warn!("Multiple LoadScene events found in listener! Should not happen");
+    }
+}
+
+fn load_scene(mut world: &mut World) {
+    // Only take one instance of SelectEntity event - multiple events should not happen
+    // TODO EventReader resource does not exist, figure out how to do it manually
+    world.resource_scope(|world, mut load_scene_flag: Mut<LoadSceneFlag>| {
+        if let Some(event) = &load_scene_flag.0 {
+            world.resource_scope(|world, mut dynamic_scenes: Mut<Assets<DynamicScene>>| {
+                if let Some(scene) = dynamic_scenes.get(event) {
+                    println!("Will load scene to world");
+                    scene
+                        .write_to_world(world, &mut EntityMap::default())
+                        .unwrap();
+                    println!("Loaded scene to world");
+                }
+            });
+            load_scene_flag.0 = None
+        }
+    });
 }
 
 fn load_assets(
@@ -942,10 +1159,7 @@ fn load_assets(
 ) {
     if let Some(project) = editor_state.current_project.as_ref() {
         for source in ev_load_assets.iter() {
-            info!(
-                "new asset requested {:?} - will load",
-                source,
-            );
+            info!("new asset requested {:?} - will load", source,);
             let asset_path = Path::new(project.project_description.path.as_os_str())
                 .join("scenes")
                 .join(project.project_state.assets_folder.clone())
@@ -953,7 +1167,11 @@ fn load_assets(
 
             let full = asset_path.to_str().unwrap().to_owned() + "#Mesh0/Primitive0";
             let handle = asset_server.load(&full);
-            asset_management.push(AssetEntry{source: source.0.clone(), original: handle, attached: None});
+            asset_management.push(AssetEntry {
+                source: source.0.clone(),
+                original: handle,
+                attached: None,
+            });
         }
     }
 }
@@ -972,8 +1190,8 @@ fn attach_assets(
         }
 
         match asset_server.get_load_state(&entry.original) {
-            LoadState::NotLoaded => {/*do nothing*/}
-            LoadState::Loading => {/*do nothing*/}
+            LoadState::NotLoaded => { /*do nothing*/ }
+            LoadState::Loading => { /*do nothing*/ }
             LoadState::Loaded => {
                 let mut clone = None;
                 if let Some(mesh) = meshes.get(&entry.original) {
@@ -988,10 +1206,7 @@ fn attach_assets(
                         mesh.clone(),
                     );
                     entry.attached = Some(new_handle);
-                    println!(
-                        "new asset attached {:?} - done processing",
-                        entry,
-                    );
+                    println!("new asset attached {:?} - done processing", entry,);
                 } else {
                     error!("No asset for entry {:?}", entry)
                 }
@@ -999,13 +1214,13 @@ fn attach_assets(
             LoadState::Failed => {
                 error!("Failed to load asset for entry {:?}", entry)
             }
-            LoadState::Unloaded => {/*do nothing*/}
+            LoadState::Unloaded => { /*do nothing*/ }
         }
     }
 }
 
 fn system_update_state_hierarchy(
-    query_hierarchy: Query<(Entity, Option<&Parent>, Option<&Children>)>,
+    query_hierarchy: Query<(Entity, Option<&Parent>, Option<&Children>, Option<&Name>)>,
     mut editor_state: ResMut<EditorState>,
     entities: &Entities,
 ) {

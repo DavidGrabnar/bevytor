@@ -2,10 +2,6 @@
   entities: {
     0: (
       components: {
-        "bevy_core::name::Name": (
-          hash: 0,
-          name: "Plane",
-        ),
         "bevy_transform::components::transform::Transform": (
           translation: (
             x: 0.0,
@@ -72,10 +68,6 @@
     ),
     1: (
       components: {
-        "bevy_core::name::Name": (
-          hash: 0,
-          name: "Parent box",
-        ),
         "bevy_hierarchy::components::children::Children": ([
           (
             generation: 0,
@@ -148,10 +140,6 @@
     ),
     2: (
       components: {
-        "bevy_core::name::Name": (
-          hash: 0,
-          name: "Child box",
-        ),
         "bevy_transform::components::transform::Transform": (
           translation: (
             x: 0.0,
@@ -222,10 +210,6 @@
     ),
     3: (
       components: {
-        "bevy_core::name::Name": (
-          hash: 12489159275294918191,
-          name: "Point light",
-        ),
         "bevy_transform::components::transform::Transform": (
           translation: (
             x: 3.0,
@@ -290,10 +274,6 @@
     ),
     4: (
       components: {
-        "bevy_core::name::Name": (
-          hash: 12489159275294918191,
-          name: "Camera",
-        ),
         "bevy_transform::components::transform::Transform": (
           translation: (
             x: 5.0,

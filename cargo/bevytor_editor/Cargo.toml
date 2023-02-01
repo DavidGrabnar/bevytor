@@ -12,14 +12,15 @@ edition = "2021"
 [dependencies]
 bevytor_core = { path = "../bevytor_core", version = "0.1.0" }
 scripts = { path = "scripts" }
-bevy = { version = "0.8.1", features = [] } #"dynamic"
-bevy_egui = "0.16.0"
+bevy = { version = "0.9.1", features = [] } #"dynamic"
+bevy_egui = "0.18.0"
 native-dialog = "0.6.3"
 serde = "1.0.144"
 serde_json = "1.0.85"
 ron = "0.8"
-bevy_common_assets = "0.3.0"
 hot-lib-reloader = { version = "0.6.4" }
+dirs = "4.0.0"
+sysinfo = "0.27.1"
 
 #[features]
 #default = []

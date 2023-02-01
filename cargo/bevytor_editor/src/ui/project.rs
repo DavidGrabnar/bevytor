@@ -5,7 +5,7 @@ use bevy_egui::egui::{Id, InnerResponse, Response, Sense, Ui, Window};
 use std::ffi::OsString;
 
 pub enum ProjectListAction {
-    Create(ProjectDescription),
+    Create,
     NewOpen(ProjectDescription),
     ExistingOpen(ProjectDescription),
     ExistingRemove(ProjectDescription),
@@ -23,24 +23,7 @@ pub fn project_list(
     if project_row(ui, "➕", "Create a new project", None, false).is_some() {
         // ignore action as Remove cannot be returned if removable is false
         println!("CLICK");
-        // Window::new("Select new project directory")
-        //     .open(open)
-        //     .resizable(false)
-        //     .show(ctx, |ui| {
-        //         use super::View as _;
-        //         self.ui(ui);
-        //     });
-
-        // TODO show panel with name and location select - file explorer with folder filter, project folder name is slug of project name (can be modified)
-        let path = OsString::from("D:\\Projects\\Rust\\bevytor\\das_demo");
-        let name = "Das demo".to_string();
-        if let Err(e) = Project::verify_new(path.clone()) {
-            bail!("PROJECT::LIST::CREATE", e);
-        }
-        return Ok(Some(ProjectListAction::Create(ProjectDescription {
-            name,
-            path,
-        })));
+        return Ok(Some(ProjectListAction::Create));
     }
     ui.separator();
 
@@ -72,6 +55,7 @@ pub fn project_list(
         ) {
             return match action {
                 ProjectRowAction::Select => {
+                    println!("action select");
                     Ok(Some(ProjectListAction::ExistingOpen(project.clone())))
                 }
                 ProjectRowAction::Remove => {
@@ -92,14 +76,16 @@ fn project_row(
     removable: bool,
 ) -> Option<ProjectRowAction> {
     let response = ui.horizontal(|ui| {
-        let response = ui.push_id(name, |ui| {
-            ui.label(icon); // TODO avatar kind of icon, centered vertically, 2 lines height
-            ui.vertical(|ui| {
-                ui.label(name);
-                ui.label(path.unwrap_or("---")); // TODO handle no path in a nicer way
-            });
+        // let response = ui.horizontal(/*name, */ |ui| {
+        let response = ui.button(icon); // TODO avatar kind of icon, centered vertically, 2 lines height
+        ui.vertical(|ui| {
+            ui.label(name);
+            ui.label(path.unwrap_or("---")); // TODO handle no path in a nicer way
         });
-        if response.response.interact(Sense::click()).clicked() {
+        // response
+        // });
+        if response.clicked() {
+            println!("clicked");
             return Some(ProjectRowAction::Select);
         }
         // TODO move button to left of panel

@@ -1,6 +1,6 @@
 use crate::error::{EResult, Error};
 use crate::{bail, World};
-use bevy::asset::{AssetServerSettings, FileAssetIo, HandleId};
+use bevy::asset::{FileAssetIo, HandleId};
 use bevy::prelude::*;
 use bevy::render::camera::{CameraProjection, Projection};
 use serde::ser::SerializeStruct;
@@ -197,7 +197,7 @@ impl Project {
         Ok(project)
     }
 }
-
+/*
 fn setup_template_scene() -> World {
     let mut world = World::new();
 
@@ -250,7 +250,6 @@ fn setup_template_scene() -> World {
 
     world
 }
-
 fn setup_template_pbr_bundle(
     world: &mut World,
     mesh: Mesh,
@@ -270,3 +269,4 @@ fn setup_template_pbr_bundle(
         ..Default::default()
     }
 }
+*/

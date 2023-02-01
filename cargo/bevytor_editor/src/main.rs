@@ -10,9 +10,7 @@ use bevy::prelude::*;
 use bevy::reflect::{
     FromType, TypeData, TypeInfo, TypeRegistration, TypeRegistry, TypeRegistryArc,
 };
-use bevy::render::camera::{
-    CameraProjection, DepthCalculation, Projection, ScalingMode, Viewport, WindowOrigin,
-};
+use bevy::render::camera::{CameraProjection, Projection, ScalingMode, Viewport, WindowOrigin};
 use bevy::scene::serialize_ron;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
@@ -38,7 +36,7 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugin(EditorPlugin::default())
         // .add_system(test_hot_system)
-        .add_startup_system(setup_scene) // TEST
+        // .add_startup_system(setup_scene) // TEST
         // .add_system(bonk.exclusive_system())
         // .add_system(honk.exclusive_system())
         .run();
@@ -54,53 +52,60 @@ struct AssetEntry {
 #[derive(Component, Reflect)]
 struct SkipSerialization;
 
-fn setup_scene(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    // // plane
-    // commands.spawn_bundle(PbrBundle {
-    //     mesh: meshes.add(Mesh::from(shape::Plane { size: 5.0 })),
-    //     material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
-    //     ..Default::default()
-    // });
-    // // cube
-    // let cube = commands
-    //     .spawn_bundle(PbrBundle {
-    //         mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
-    //         material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
-    //         transform: Transform::from_xyz(0.0, 0.5, 0.0),
-    //         ..Default::default()
-    //     })
-    //     .id();
-    // // child cube
-    // commands
-    //     .spawn_bundle(PbrBundle {
-    //         mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
-    //         material: materials.add(Color::rgb(0.6, 0.7, 0.8).into()),
-    //         transform: Transform::from_xyz(0.0, 1.0, 0.0),
-    //         ..Default::default()
-    //     })
-    //     .add_child(cube);
-    // // light
-    // commands.spawn_bundle(PointLightBundle {
-    //     transform: Transform::from_xyz(3.0, 8.0, 5.0),
-    //     ..Default::default()
-    // });
+fn setup_scene(world: &mut World) {
+    // --------- initial scene ------------------
+    /*world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
+        world.resource_scope(|world, mut materials: Mut<Assets<StandardMaterial>>| {
+            world.resource_scope(|world, type_registry: Mut<AppTypeRegistry>| {
+                // plane
+                world.spawn(PbrBundle {
+                    mesh: meshes.add(Mesh::from(shape::Plane { size: 5.0 })),
+                    material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
+                    ..default()
+                });
+                // cube
+                let cube = world
+                    .spawn(PbrBundle {
+                        mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
+                        material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
+                        transform: Transform::from_xyz(0.0, 0.5, 0.0),
+                        ..default()
+                    })
+                    .with_children(|parent| {
+                        // child cube
+                        parent.spawn(PbrBundle {
+                            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
+                            material: materials.add(Color::rgb(0.6, 0.7, 0.8).into()),
+                            transform: Transform::from_xyz(0.0, 1.0, 0.0),
+                            ..default()
+                        });
+                    });
+                // light
+                world.spawn(PointLightBundle {
+                    transform: Transform::from_xyz(3.0, 8.0, 5.0),
+                    ..default()
+                });
 
-    // camera
-    /*commands.spawn_bundle(Camera3dBundle {
-        projection: Projection::Orthographic(OrthographicProjection {
-            // Why so small scale?
-            scale: 0.01,
-            ..default()
-        }),
-        transform: Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    })
-        .insert(SkipSerialization);*/
+                // camera
+                /*commands.spawn_bundle(Camera3dBundle {
+                    projection: Projection::Orthographic(OrthographicProjection {
+                        // Why so small scale?
+                        scale: 0.01,
+                        ..default()
+                    }),
+                    transform: Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+                    ..default()
+                })
+                    .insert(SkipSerialization);*/
 
+                let scene = DynamicScene::from_world(world, &type_registry);
+                let result = scene.serialize_ron(&type_registry).unwrap();
+                fs::write(Path::new("./test-initial-scene.ron"), result).unwrap();
+            });
+        });
+    });*/
+
+    // --------- asset entries ------------------
     let asset_entries: Vec<AssetEntry> = vec![
         AssetEntry {
             filename: "cube.gltf".to_string(),
@@ -117,7 +122,7 @@ fn setup_scene(
     let result = serialize_ron(asset_entries).unwrap();
     fs::write(Path::new("./test-asset-entries.ron"), result).unwrap();
 }
-
+/*
 fn bonk(world: &mut World) {
     println!("before");
     sleep(Duration::from_secs(2));
@@ -163,7 +168,7 @@ fn bonk(world: &mut World) {
     fs::write(Path::new("/home/grabn/projects/bevytor/banana.ron"), ser).unwrap();
     println!("saved");
 }
-
+*/
 fn honk(meshes_res: Res<Assets<Mesh>>) {
     println!("before");
     // sleep(Duration::from_secs(2));
