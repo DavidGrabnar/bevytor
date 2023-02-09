@@ -3,42 +3,27 @@ General TODOs:
 - handle unwraps as errors
 */
 
+use crate::bail;
 use crate::error::{EResult, Error};
 use crate::service::existing_projects::ExistingProjects;
 use crate::service::project::{Project, ProjectDescription};
-use crate::ui::file_explorer::{explorer_row, show_ui_file_editor};
 use crate::ui::project::{project_list, ProjectListAction};
-use crate::{bail, TypeRegistry};
-use bevy::asset::{Asset, HandleId, SourceMeta};
-use bevy::ecs::archetype::Archetypes;
-use bevy::ecs::component::Components;
+use bevy::asset::{Asset, HandleId};
 use bevy::ecs::entity::{Entities, EntityMap};
-use bevy::ecs::schedule::IntoRunCriteria;
-use bevy::ecs::world::EntityRef;
-use bevy::gltf::{Gltf, GltfMesh, GltfPrimitive};
 use bevy::prelude::*;
-use bevy::reflect::erased_serde::deserialize;
-use bevy::reflect::{List, ReflectMut, TypeRegistryArc, TypeUuid};
-use bevy::render::camera::{CameraProjection, Projection};
-use bevy::render::mesh::{Indices, MeshVertexAttributeId, VertexAttributeValues};
+use bevy::reflect::{ReflectMut, TypeUuid};
 use bevy::utils::Uuid;
-use bevy_egui::egui::{Checkbox, CollapsingHeader, Grid, TextBuffer, Ui};
+use bevy_egui::egui::{Checkbox, Grid, Ui};
 use bevy_egui::{egui, EguiContext, EguiPlugin};
 use bevytor_core::tree::{Action, Tree};
-use bevytor_core::{
-    setup_ui_hierarchy, setup_ui_inspector, show_ui_hierarchy, update_state_hierarchy,
-    SelectedEntity,
-};
-use serde::ser::{SerializeStruct, SerializeTuple};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::any;
+use bevytor_core::{show_ui_hierarchy, update_state_hierarchy, SelectedEntity};
+use serde::{Deserialize, Serialize};
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
-use std::env::home_dir;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use sysinfo::{DiskExt, RefreshKind, SystemExt};
+use sysinfo::{RefreshKind, SystemExt};
 
 pub struct EditorPlugin {
     widgets: Vec<Box<dyn Widget + Sync + Send>>,
@@ -329,10 +314,6 @@ impl Default for SerializeRegistry {
         new.register::<bool>();
         new.register::<Vec3>();
         new.register::<Quat>();
-        // new.register::<Handle<StandardMaterial>>();
-        // new.register::<Handle<Mesh>>();
-        // new.register::<Transform>();
-        // new.register::<StandardMaterial>();
         new
     }
 }
@@ -438,49 +419,6 @@ impl<T: Serialize> Serializable for T {
     }
 }
 
-struct Serde<T> {
-    internal: T,
-}
-
-/*impl Serialize for Serde<Mesh> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-
-        let mut state = serializer.serialize_struct("Serde<Mesh>", 3)?;
-        state.serialize_field("primitive_topology", &(self.internal.primitive_topology() as u8))?;
-        state.serialize_field("attributes", &self.internal.attributes())?;
-        state.serialize_field("indices", &self.internal.indices().map(|indices| Serde { internal: indices }))?;
-        state.end()
-    }
-}
-
-impl Serialize for Serde<&Indices> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        match self.internal {
-            Indices::U16(vec) => serializer.serialize_newtype_variant("Indices", 0, "U16", &vec),
-            Indices::U32(vec) => serializer.serialize_newtype_variant("Indices", 0, "U32", &vec)
-        }
-    }
-}*/
-
-/*impl Serialize for Serde<Box<dyn Iterator<Item = (MeshVertexAttributeId, &VertexAttributeValues)>>> {
-    fn serialize<S>(&mut self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        serializer.collect_seq(self.internal.by_ref())
-    }
-}
-
-impl Serialize for Serde<(MeshVertexAttributeId, &VertexAttributeValues)> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        let mut seq = serializer.serialize_tuple(2)?;
-        seq.serialize_element(&(self.internal.0.))?;
-        seq.serialize_element(self.internal.1)?;
-        seq.end()
-    }
-}
-
-impl Serialize for Serde<MeshVertexAttributeId> {
-
-}*/
-
 struct Context {
     world: *mut World,
     collapsible: Option<String>,
@@ -522,16 +460,49 @@ struct AssetSource {
     // asset_handle: Option<Handle<Mesh>>, // TODO make dynamic
 }
 
+#[derive(Resource)]
+struct AssetRegistry {
+    impls: HashMap<Uuid, (String, Box<fn(&mut AssetEntry, &mut World) -> ()>)>,
+}
+
+impl Default for AssetRegistry {
+    fn default() -> Self {
+        let mut instance = Self {
+            impls: Default::default(),
+        };
+        instance.register::<Mesh>("#Mesh0/Primitive0".to_string());
+        instance.register::<StandardMaterial>("#Material0".to_string());
+        instance
+    }
+}
+
+impl AssetRegistry {
+    pub fn register<T: Asset + Clone + TypeUuid + 'static>(&mut self, label: String) {
+        self.impls.insert(
+            T::TYPE_UUID,
+            (
+                label,
+                Box::new(|entry: &mut AssetEntry, world: &mut World| {
+                    world.resource_scope(|world, mut assets: Mut<Assets<T>>| {
+                        handle_attach_asset(&mut assets, entry);
+                    });
+                }),
+            ),
+        );
+    }
+
+    pub fn attach_asset(&self, entry: &mut AssetEntry, world: &mut World) {
+        let uuid = Uuid::parse_str(entry.source.type_uuid.as_str()).unwrap();
+        let callback = self.impls.get(&uuid).unwrap();
+        callback.1(entry, world);
+    }
+}
+
 #[derive(Debug, Clone)]
 struct AssetEntry {
     source: AssetSource,
-    original: Handle<Mesh>,
-    attached: Option<Handle<Mesh>>,
-}
-
-enum GltfAssetHandle {
-    Mesh(Handle<Mesh>),
-    Material(Handle<StandardMaterial>),
+    original: HandleUntyped,
+    attached: Option<HandleUntyped>,
 }
 
 #[derive(Default, Deref, DerefMut, Resource)]
@@ -563,6 +534,7 @@ impl Plugin for EditorPlugin {
             .init_resource::<ForceKeep>()
             .init_resource::<UiRegistry>()
             .init_resource::<LoadSceneFlag>()
+            .init_resource::<AssetRegistry>()
             .add_event::<LoadProject>()
             .add_event::<LoadScene>()
             .add_event::<LoadAsset>()
@@ -1028,7 +1000,7 @@ fn load_project(
         });*/
 
         // TODO dynamically load resources
-        let _handle_material1 = materials.set(
+        /*let _handle_material1 = materials.set(
             HandleId::Id(
                 Uuid::from_str("7494888b-c082-457b-aacf-517228cc0c22").unwrap(),
                 9399192938557672737,
@@ -1052,7 +1024,7 @@ fn load_project(
 
         force_keep.standard_materials.push(_handle_material1);
         force_keep.standard_materials.push(_handle_material2);
-        force_keep.standard_materials.push(_handle_material3);
+        force_keep.standard_materials.push(_handle_material3);*/
 
         let project: Project = event.0.clone();
         editor_state.current_file_explorer_path =
@@ -1155,6 +1127,7 @@ fn load_assets(
     mut ev_load_assets: EventReader<LoadAsset>,
     asset_server: Res<AssetServer>,
     editor_state: ResMut<EditorState>,
+    asset_registry: Res<AssetRegistry>,
     mut asset_management: ResMut<AssetManagement>,
 ) {
     if let Some(project) = editor_state.current_project.as_ref() {
@@ -1165,58 +1138,49 @@ fn load_assets(
                 .join(project.project_state.assets_folder.clone())
                 .join(source.filename.clone());
 
-            let full = asset_path.to_str().unwrap().to_owned() + "#Mesh0/Primitive0";
-            let handle = asset_server.load(&full);
+            let uuid = Uuid::parse_str(source.type_uuid.as_str()).unwrap();
+            let asset_impl = asset_registry.impls.get(&uuid).unwrap();
+
+            let full = asset_path.to_str().unwrap().to_owned() + asset_impl.0.as_str();
+            println!("TEST {}", full);
+            let untyped_handle = asset_server.load_untyped(full);
+            //let handle = asset_server.load(&full);
             asset_management.push(AssetEntry {
                 source: source.0.clone(),
-                original: handle,
+                original: untyped_handle,
                 attached: None,
             });
         }
     }
 }
 
-fn attach_assets(
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut asset_management: ResMut<AssetManagement>,
-) {
+fn attach_assets(mut world: &mut World) {
     use bevy::asset::LoadState;
 
-    for mut entry in asset_management.0.iter_mut() {
-        if entry.attached.is_some() {
-            // already attached
-            continue;
-        }
+    world.resource_scope(|world, mut asset_management: Mut<AssetManagement>| {
+        for mut entry in asset_management.0.iter_mut() {
+            if entry.attached.is_some() {
+                // already attached
+                continue;
+            }
 
-        match asset_server.get_load_state(&entry.original) {
-            LoadState::NotLoaded => { /*do nothing*/ }
-            LoadState::Loading => { /*do nothing*/ }
-            LoadState::Loaded => {
-                let mut clone = None;
-                if let Some(mesh) = meshes.get(&entry.original) {
-                    clone = Some(mesh.clone());
+            world.resource_scope(|world, asset_server: Mut<AssetServer>| {
+                match asset_server.get_load_state(&entry.original) {
+                    LoadState::NotLoaded => { /*do nothing*/ }
+                    LoadState::Loading => { /*do nothing*/ }
+                    LoadState::Loaded => {
+                        world.resource_scope(|world, asset_registry: Mut<AssetRegistry>| {
+                            asset_registry.attach_asset(entry, world);
+                        });
+                    }
+                    LoadState::Failed => {
+                        error!("Failed to load asset for entry {:?}", entry)
+                    }
+                    LoadState::Unloaded => { /*do nothing*/ }
                 }
-                if let Some(mesh) = clone {
-                    let new_handle = meshes.set(
-                        HandleId::Id(
-                            Uuid::from_str(entry.source.type_uuid.as_str()).unwrap(),
-                            entry.source.uid,
-                        ),
-                        mesh.clone(),
-                    );
-                    entry.attached = Some(new_handle);
-                    println!("new asset attached {:?} - done processing", entry,);
-                } else {
-                    error!("No asset for entry {:?}", entry)
-                }
-            }
-            LoadState::Failed => {
-                error!("Failed to load asset for entry {:?}", entry)
-            }
-            LoadState::Unloaded => { /*do nothing*/ }
+            });
         }
-    }
+    });
 }
 
 fn system_update_state_hierarchy(
@@ -1230,4 +1194,24 @@ fn system_update_state_hierarchy(
 
 fn get_editor_state(mut editor_state: ResMut<EditorState>) {
     editor_state.existing_projects = ExistingProjects::load().unwrap();
+}
+
+fn handle_attach_asset<T: Asset + Clone>(assets: &mut Assets<T>, entry: &mut AssetEntry) {
+    let mut clone = None;
+    if let Some(asset) = assets.get(&entry.original.clone().typed()) {
+        clone = Some(asset.clone());
+    }
+    if let Some(asset) = clone {
+        let new_handle = assets.set(
+            HandleId::Id(
+                Uuid::from_str(entry.source.type_uuid.as_str()).unwrap(),
+                entry.source.uid,
+            ),
+            asset.clone(),
+        );
+        entry.attached = Some(new_handle.clone_untyped());
+        println!("new asset attached {:?} - done processing", entry,);
+    } else {
+        error!("No asset for entry {:?}", entry)
+    }
 }
