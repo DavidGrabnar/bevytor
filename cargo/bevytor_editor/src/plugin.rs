@@ -273,14 +273,17 @@ impl Inspectable for bool {
     }
 }
 
-impl<T: Asset + Inspectable> Inspectable for Handle<T> {
+impl<T: Asset + Reflect> Inspectable for Handle<T> {
     fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
         // UNSAFE try to narrow the scope of unsafe - EXCLUSIVELY FOR RESOURCE MODIFICATION OR READ-ONLY OTHERWISE THIS CAN GO KABOOM
         unsafe {
             let world = &mut *context.world;
             world.resource_scope(|world, mut res: Mut<Assets<T>>| {
                 let value = res.get_mut(self);
-                value.unwrap().ui(ui, context);
+                context
+                    .registry
+                    .exec_reflect(value.unwrap(), ui, context)
+                    .unwrap();
             });
         }
     }
@@ -308,8 +311,9 @@ impl Inspectable for Name {
     }
 }
 
-struct Context {
+struct Context<'a> {
     world: *mut World,
+    registry: &'a InspectRegistry,
     collapsible: Option<String>,
 }
 
@@ -819,12 +823,15 @@ fn ui_inspect(
 
                                 let context = &mut Context {
                                     world,
+                                    registry: &inspect_registry,
                                     collapsible: Some(
                                         component_name.rsplit_once(':').unwrap().1.to_string(),
                                     ),
                                 };
                                 let reflect = reflect_component.reflect_mut(world, entity).unwrap();
-                                inspect_registry.exec_reflect(reflect.into_inner(), ui, context);
+                                inspect_registry
+                                    .exec_reflect(reflect.into_inner(), ui, context)
+                                    .unwrap();
                             } else {
                                 // println!("NOT IN TYPE REGISTRY {:?}: {}", component_type_id, component_name);
                             }
