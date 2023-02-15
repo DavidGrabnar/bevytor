@@ -35,10 +35,7 @@ pub fn update_state_hierarchy(
 ) -> Tree {
     let mut entity_name_map: HashMap<Entity, String> = HashMap::new();
     for (entity, _parent, _children, name) in hierarchy.iter() {
-        let label = name
-            .map(|n| n.as_str().to_string())
-            .unwrap_or(format!("Entity {}", entity.index()));
-        entity_name_map.insert(entity, label);
+        entity_name_map.insert(entity, get_label(entity, name));
     }
 
     let mut entity_children: HashMap<Entity, Vec<(&Entity, &String)>> = HashMap::new();
@@ -257,4 +254,11 @@ fn build_rotation_drag_value_input<'a>(
         }
         transform.rotation.to_euler(*euler_rot).0 as f64
     })
+}
+
+pub fn get_label(entity: Entity, name: Option<&Name>) -> String {
+    let label = name
+        .map(|n| n.as_str().to_string())
+        .unwrap_or(format!("Entity {}", entity.index()));
+    label
 }

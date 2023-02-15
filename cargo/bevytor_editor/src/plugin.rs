@@ -20,7 +20,7 @@ use bevy::utils::Uuid;
 use bevy_egui::egui::{Checkbox, Grid, Ui};
 use bevy_egui::{egui, EguiContext, EguiPlugin};
 use bevytor_core::tree::{Action, Tree};
-use bevytor_core::{show_ui_hierarchy, update_state_hierarchy, SelectedEntity};
+use bevytor_core::{get_label, show_ui_hierarchy, update_state_hierarchy, SelectedEntity};
 use serde::{Deserialize, Serialize};
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet, LinkedList};
@@ -335,6 +335,9 @@ struct LoadSceneFlag(Option<Handle<DynamicScene>>);
 
 struct SelectEntity(Entity);
 
+#[derive(Deref)]
+struct RemoveEntity(Entity);
+
 #[derive(Default, Resource)]
 struct EventProxy(LinkedList<LoadAsset>);
 
@@ -566,6 +569,7 @@ impl Plugin for EditorPlugin {
             .add_event::<LoadAsset>()
             .add_event::<SaveProject>()
             .add_event::<SelectEntity>()
+            .add_event::<RemoveEntity>()
             .add_event::<AddSimpleObject>()
             .add_plugin(EguiPlugin)
             .add_startup_system(get_editor_state)
@@ -587,6 +591,7 @@ impl Plugin for EditorPlugin {
             .add_system(select_entity)
             .add_system(attach_assets)
             .add_system(add_simple_object)
+            .add_system(remove_entity)
             // .add_system(update_ui_registry)
             .add_system(system_update_state_hierarchy);
 
@@ -755,10 +760,17 @@ fn ui_inspect(
         egui::SidePanel::right("inspector").show(egui_context.ctx_mut(), |ui| {
             // show_ui_hierarchy(ui, &editor_state.tree);
 
-            if let Ok(entity) = world
-                .query_filtered::<Entity, With<SelectedEntity>>()
+            if let Ok((entity, name)) = world
+                .query_filtered::<(Entity, Option<&Name>), With<SelectedEntity>>()
                 .get_single_mut(world)
             {
+                let label = get_label(entity, name);
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    if ui.button("❌").clicked() {
+                        world.send_event(RemoveEntity(entity));
+                    }
+                });
                 //     let type_registry = type_registry_arc.read();
                 //
                 let mut component_type_ids = Vec::new();
@@ -1137,6 +1149,12 @@ fn select_entity(
 
     if ev_select_entity.iter().next().is_some() {
         warn!("Multiple SelectEntity events found in listener! Should not happen");
+    }
+}
+
+fn remove_entity(mut commands: Commands, mut ev_remove_entity: EventReader<RemoveEntity>) {
+    for entity in ev_remove_entity.iter() {
+        commands.entity(**entity).despawn_recursive();
     }
 }
 
