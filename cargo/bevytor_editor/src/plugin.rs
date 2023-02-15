@@ -1174,7 +1174,9 @@ fn load_scene_proxy(
     }
 }
 
-fn load_scene(mut world: &mut World) {
+// Consider using Commands when world is needed
+// that might solve event proxy hack
+fn load_scene(world: &mut World) {
     // TODO EventReader resource does not exist, figure out how to do it manually
     world.resource_scope(|world, mut load_scene_flag: Mut<LoadSceneFlag>| {
         if let Some(event) = &load_scene_flag.0 {
@@ -1260,6 +1262,8 @@ fn attach_assets(mut world: &mut World) {
     });
 }
 
+// consider using HierarchyEvents to keep it updated
+// not hierarchy data won't be handled by them (ex.: Name label, etc.?)
 fn system_update_state_hierarchy(
     query_hierarchy: Query<(Entity, Option<&Parent>, Option<&Children>, Option<&Name>)>,
     mut editor_state: ResMut<EditorState>,
