@@ -5,13 +5,17 @@ General TODOs:
 
 use crate::bail;
 use crate::error::{EResult, Error};
+use crate::plugin::AssetSourceType::AsFile;
 use crate::service::existing_projects::ExistingProjects;
 use crate::service::project::{Project, ProjectDescription};
 use crate::ui::project::{project_list, ProjectListAction};
+use bevy::asset::HandleId::Id;
 use bevy::asset::{Asset, HandleId};
 use bevy::ecs::entity::{Entities, EntityMap};
+use bevy::ecs::event::Event;
 use bevy::prelude::*;
 use bevy::reflect::{ReflectMut, TypeUuid};
+use bevy::scene::serialize_ron;
 use bevy::utils::Uuid;
 use bevy_egui::egui::{Checkbox, Grid, Ui};
 use bevy_egui::{egui, EguiContext, EguiPlugin};
@@ -19,8 +23,11 @@ use bevytor_core::tree::{Action, Tree};
 use bevytor_core::{show_ui_hierarchy, update_state_hierarchy, SelectedEntity};
 use serde::{Deserialize, Serialize};
 use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, LinkedList};
 use std::ffi::OsString;
+use std::fmt;
+use std::fmt::Formatter;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use sysinfo::{RefreshKind, SystemExt};
@@ -65,9 +72,6 @@ impl Default for EditorState {
     }
 }
 
-#[derive(Component)]
-struct SceneRoot {}
-
 pub trait Widget {
     fn show_ui(&self, ui: &mut Ui);
     fn update_state(&self);
@@ -77,11 +81,6 @@ pub trait Widget {
 struct InspectRegistry {
     impls: HashMap<TypeId, Box<fn(&mut dyn Any, &mut egui::Ui, &mut Context) -> ()>>,
     skipped: HashSet<TypeId>,
-}
-
-#[derive(Resource, Default)]
-struct ForceKeep {
-    standard_materials: Vec<Handle<StandardMaterial>>,
 }
 
 impl Default for InspectRegistry {
@@ -103,6 +102,7 @@ impl Default for InspectRegistry {
         // new.register::<Handle<Mesh>>();
         // new.register::<Transform>();
         new.register::<StandardMaterial>();
+        new.register::<Name>();
         new
     }
 }
@@ -300,6 +300,14 @@ impl Inspectable for StandardMaterial {
     }
 }
 
+impl Inspectable for Name {
+    fn ui(&mut self, ui: &mut Ui, _context: &mut Context) {
+        self.mutate(|name| {
+            ui.text_edit_singleline(name);
+        });
+    }
+}
+
 struct Context {
     world: *mut World,
     collapsible: Option<String>,
@@ -327,23 +335,71 @@ struct LoadSceneFlag(Option<Handle<DynamicScene>>);
 
 struct SelectEntity(Entity);
 
-#[derive(Deref, Debug)]
+#[derive(Default, Resource)]
+struct EventProxy(LinkedList<LoadAsset>);
+
+#[derive(Deref, Debug, Clone)]
 struct LoadAsset(AssetSource);
+
+#[derive(Default, Resource)]
+struct AssetSourceList(Vec<AssetSource>);
+
+#[derive(Eq, PartialEq, Hash, Serialize, Deserialize, Debug, Clone)]
+enum AssetSourceType {
+    AsString(String),
+    AsFile(String),
+}
 
 #[derive(Eq, PartialEq, Hash, Serialize, Deserialize, Debug, Clone)]
 struct AssetSource {
-    filename: String,
+    source_type: AssetSourceType,
     type_uuid: String,
     uid: u64,
-    // #[serde(skip_serializing, skip_deserializing)]
-    // gltf_handle: Option<Handle<Gltf>>,
-    // #[serde(skip_serializing, skip_deserializing)]
-    // asset_handle: Option<Handle<Mesh>>, // TODO make dynamic
+}
+
+trait AssetSourceable {
+    fn from_string(raw: String) -> EResult<Self>
+    where
+        Self: Sized + Asset;
+
+    fn to_string(&self, prev_raw: String) -> EResult<String>
+    where
+        Self: Asset;
+}
+
+impl AssetSourceable for Mesh {
+    fn from_string(raw: String) -> EResult<Self> {
+        Ok(raw.parse::<SimpleObject>().unwrap().to_mesh())
+    }
+
+    fn to_string(&self, prev_raw: String) -> EResult<String> {
+        // Do nothing as all information is in the string itself
+        Ok(prev_raw)
+    }
+}
+
+impl AssetSourceable for StandardMaterial {
+    fn from_string(raw: String) -> EResult<Self> {
+        let color = ron::from_str::<Color>(raw.as_str()).unwrap();
+        Ok(StandardMaterial::from(color))
+    }
+
+    fn to_string(&self, _: String) -> EResult<String> {
+        let serialized = ron::to_string(&self.base_color).unwrap();
+        Ok(serialized)
+    }
 }
 
 #[derive(Resource)]
 struct AssetRegistry {
-    impls: HashMap<Uuid, (String, Box<fn(&mut AssetEntry, &mut World) -> ()>)>,
+    impls: HashMap<
+        Uuid,
+        (
+            Box<fn(&AssetSource, &mut World) -> HandleUntyped>, // create
+            Box<fn(&mut AssetSource, &World) -> ()>,            // update
+            Box<fn(&mut AssetEntry, &mut World) -> ()>,         // attach
+        ),
+    >,
 }
 
 impl Default for AssetRegistry {
@@ -351,18 +407,53 @@ impl Default for AssetRegistry {
         let mut instance = Self {
             impls: Default::default(),
         };
-        instance.register::<Mesh>("#Mesh0/Primitive0".to_string());
-        instance.register::<StandardMaterial>("#Material0".to_string());
+        instance.register::<Mesh>();
+        instance.register::<StandardMaterial>();
         instance
     }
 }
 
 impl AssetRegistry {
-    pub fn register<T: Asset + Clone + TypeUuid + 'static>(&mut self, label: String) {
+    pub fn register<T: AssetSourceable + Asset + Clone + TypeUuid + 'static>(&mut self) {
         self.impls.insert(
             T::TYPE_UUID,
             (
-                label,
+                Box::new(
+                    |source: &AssetSource, world: &mut World| match &source.source_type {
+                        AssetSourceType::AsString(raw) => {
+                            world.resource_scope(|world, mut assets: Mut<Assets<T>>| {
+                                let asset = T::from_string(raw.clone()).unwrap();
+                                assets.add(asset).clone_untyped()
+                            })
+                        }
+                        AssetSourceType::AsFile(filepath) => {
+                            /*let asset_path =
+                                Path::new(project.project_description.path.as_os_str())
+                                    .join("scenes")
+                                    .join(project.project_state.assets_folder.clone())
+                                    .join(filepath.clone());
+
+                            asset_server.load_untyped(asset_path.to_str().unwrap())*/
+                            todo!("WIP")
+                        }
+                    },
+                ),
+                Box::new(|source: &mut AssetSource, world: &World| {
+                    source.source_type = match &source.source_type {
+                        AssetSourceType::AsString(raw) => {
+                            let uuid = Uuid::from_str(&source.type_uuid).unwrap();
+                            let handle = Handle::weak(Id(uuid, source.uid));
+                            let assets = world.resource::<Assets<T>>();
+                            let asset = assets.get(&handle).unwrap();
+                            let new_raw = asset.to_string(raw.clone()).unwrap();
+                            AssetSourceType::AsString(new_raw)
+                        }
+                        AssetSourceType::AsFile(filepath) => {
+                            // Do nothing as handle does not need to be updated at all
+                            AsFile(filepath.to_string())
+                        }
+                    }
+                }),
                 Box::new(|entry: &mut AssetEntry, world: &mut World| {
                     world.resource_scope(|world, mut assets: Mut<Assets<T>>| {
                         handle_attach_asset(&mut assets, entry);
@@ -375,7 +466,13 @@ impl AssetRegistry {
     pub fn attach_asset(&self, entry: &mut AssetEntry, world: &mut World) {
         let uuid = Uuid::parse_str(entry.source.type_uuid.as_str()).unwrap();
         let callback = self.impls.get(&uuid).unwrap();
-        callback.1(entry, world);
+        callback.2(entry, world);
+    }
+
+    pub fn update_source(&self, source: &mut AssetSource, world: &World) {
+        let uuid = Uuid::parse_str(source.type_uuid.as_str()).unwrap();
+        let callback = self.impls.get(&uuid).unwrap();
+        callback.1(source, world);
     }
 }
 
@@ -388,6 +485,53 @@ struct AssetEntry {
 
 #[derive(Default, Deref, DerefMut, Resource)]
 struct AssetManagement(Vec<AssetEntry>);
+
+#[derive(PartialEq)]
+enum SimpleObject {
+    Cube,
+    Plane,
+    Sphere,
+}
+
+impl FromStr for SimpleObject {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Cube" => Ok(SimpleObject::Cube),
+            "Plane" => Ok(SimpleObject::Plane),
+            "Sphere" => Ok(SimpleObject::Sphere),
+            _ => Err(()),
+        }
+    }
+}
+
+impl ToString for SimpleObject {
+    fn to_string(&self) -> String {
+        match self {
+            SimpleObject::Cube => "Cube",
+            SimpleObject::Plane => "Plane",
+            SimpleObject::Sphere => "Sphere",
+        }
+        .to_string()
+    }
+}
+
+impl SimpleObject {
+    fn to_mesh(&self) -> Mesh {
+        match self {
+            SimpleObject::Cube => Mesh::from(shape::Cube { size: 1.0 }),
+            SimpleObject::Plane => Mesh::from(shape::Plane { size: 1.0 }),
+            SimpleObject::Sphere => Mesh::from(shape::UVSphere {
+                radius: 1.0,
+                sectors: 10,
+                stacks: 10,
+            }),
+        }
+    }
+}
+
+struct AddSimpleObject(SimpleObject);
 
 #[derive(Eq, PartialEq, Hash)]
 enum UiReference {
@@ -412,15 +556,17 @@ impl Plugin for EditorPlugin {
         app.init_resource::<AssetManagement>()
             .init_resource::<InspectRegistry>()
             .init_resource::<EditorState>()
-            .init_resource::<ForceKeep>()
             .init_resource::<UiRegistry>()
+            .init_resource::<EventProxy>()
             .init_resource::<LoadSceneFlag>()
             .init_resource::<AssetRegistry>()
+            .init_resource::<AssetSourceList>()
             .add_event::<LoadProject>()
             .add_event::<LoadScene>()
             .add_event::<LoadAsset>()
             .add_event::<SaveProject>()
             .add_event::<SelectEntity>()
+            .add_event::<AddSimpleObject>()
             .add_plugin(EguiPlugin)
             .add_startup_system(get_editor_state)
             // Ensure order of UI systems execution!
@@ -435,10 +581,12 @@ impl Plugin for EditorPlugin {
             .add_system(load_project)
             .add_system(load_scene_proxy)
             .add_system(load_scene)
+            .add_system(load_assets_proxy)
             .add_system(load_assets)
             .add_system(save_project)
             .add_system(select_entity)
             .add_system(attach_assets)
+            .add_system(add_simple_object)
             // .add_system(update_ui_registry)
             .add_system(system_update_state_hierarchy);
 
@@ -463,11 +611,6 @@ fn ui_menu(mut egui_context: ResMut<EguiContext>, mut ev_load_asset: EventWriter
                 {
                     *ui.ctx().memory() = Default::default();
                     ui.close_menu();
-                }
-            });
-            ui.menu_button("Objects", |ui| {
-                if ui.button("Add cube").clicked() {
-                    // ev_load_asset.send(LoadAsset(entry));
                 }
             });
         });
@@ -583,6 +726,17 @@ fn ui_inspect(
                     if ui.button("Save project").clicked() {
                         world.send_event(SaveProject());
                         ui.close_menu();
+                    }
+                });
+                ui.menu_button("Objects", |ui| {
+                    if ui.button("Cube").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::Cube));
+                    }
+                    if ui.button("Plane").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::Plane));
+                    }
+                    if ui.button("Sphere").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::Sphere));
                     }
                 });
             });
@@ -826,14 +980,12 @@ fn ui_inspect(
 // }
 
 fn load_project(
-    mut commands: Commands,
     mut editor_state: ResMut<EditorState>,
     mut ev_load_project: EventReader<LoadProject>,
     asset_server: Res<AssetServer>,
     mut ev_load_asset: EventWriter<LoadAsset>,
     mut ev_load_scene: EventWriter<LoadScene>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut force_keep: ResMut<ForceKeep>,
+    mut asset_source_list: ResMut<AssetSourceList>,
 ) {
     // Only take one instance of LoadProject event - multiple events should not happen
     if let Some(event) = ev_load_project.iter().next() {
@@ -849,6 +1001,14 @@ fn load_project(
             project_scene_path, project_asset_path
         );
 
+        let c = Color::rgb(0.7, 0.7, 0.7);
+        let x = AssetSource {
+            source_type: AssetSourceType::AsString(serialize_ron(c).unwrap()),
+            type_uuid: "asdasd".to_string(),
+            uid: 1234,
+        };
+        println!("TEST {}", serialize_ron(x).unwrap());
+
         let asset_entries: Vec<AssetSource> = ron::from_str(
             std::fs::read_to_string(project_asset_path)
                 .unwrap()
@@ -859,6 +1019,7 @@ fn load_project(
         println!("{:?}", asset_entries);
 
         for entry in asset_entries {
+            asset_source_list.0.push(entry.clone());
             ev_load_asset.send(LoadAsset(entry));
         }
 
@@ -922,9 +1083,11 @@ fn save_project(
     world: &World,
     mut ev_save_project: EventReader<SaveProject>,
     type_registry: Res<AppTypeRegistry>,
+    asset_registry: Res<AssetRegistry>,
+    asset_source_list: Res<AssetSourceList>,
 ) {
     // Only take one instance of LoadProject event - multiple events should not happen
-    if let Some(event) = ev_save_project.iter().next() {
+    if let Some(_) = ev_save_project.iter().next() {
         if let Some(project) = &world.resource::<EditorState>().current_project {
             let project_scene_path = Path::new(project.project_description.path.as_os_str())
                 .join("scenes")
@@ -940,9 +1103,16 @@ fn save_project(
 
             //let type_registry = type_registry.read();
             let scene = DynamicScene::from_world(world, &type_registry);
-            let ser = scene.serialize_ron(&type_registry).unwrap();
+            let scene_serialized = scene.serialize_ron(&type_registry).unwrap();
 
-            std::fs::write(project_scene_path, ser).unwrap();
+            std::fs::write(project_scene_path, scene_serialized).unwrap();
+
+            let mut source_list_clone = asset_source_list.0.clone();
+            for source in source_list_clone.as_mut_slice() {
+                asset_registry.update_source(source, world);
+            }
+            let assets_serialized = serialize_ron(&source_list_clone).unwrap();
+            std::fs::write(project_asset_path, assets_serialized).unwrap();
         }
     }
 
@@ -980,13 +1150,13 @@ fn load_scene_proxy(
     if let Some(event) = ev_load_scene.iter().next() {
         load_scene_flag.0 = Some(event.0.clone())
     }
+    // Only take one instance of SelectEntity event - multiple events should not happen
     if ev_load_scene.iter().next().is_some() {
         warn!("Multiple LoadScene events found in listener! Should not happen");
     }
 }
 
 fn load_scene(mut world: &mut World) {
-    // Only take one instance of SelectEntity event - multiple events should not happen
     // TODO EventReader resource does not exist, figure out how to do it manually
     world.resource_scope(|world, mut load_scene_flag: Mut<LoadSceneFlag>| {
         if let Some(event) = &load_scene_flag.0 {
@@ -1004,35 +1174,37 @@ fn load_scene(mut world: &mut World) {
     });
 }
 
-fn load_assets(
-    mut ev_load_assets: EventReader<LoadAsset>,
-    asset_server: Res<AssetServer>,
-    editor_state: ResMut<EditorState>,
-    asset_registry: Res<AssetRegistry>,
-    mut asset_management: ResMut<AssetManagement>,
+fn load_assets_proxy(
+    mut er_load_assets: EventReader<LoadAsset>,
+    mut ep_load_assets: ResMut<EventProxy>,
 ) {
-    if let Some(project) = editor_state.current_project.as_ref() {
-        for source in ev_load_assets.iter() {
-            info!("new asset requested {:?} - will load", source,);
-            let asset_path = Path::new(project.project_description.path.as_os_str())
-                .join("scenes")
-                .join(project.project_state.assets_folder.clone())
-                .join(source.filename.clone());
+    for event in er_load_assets.iter() {
+        ep_load_assets.0.push_front(event.clone());
+    }
+}
 
-            let uuid = Uuid::parse_str(source.type_uuid.as_str()).unwrap();
-            let asset_impl = asset_registry.impls.get(&uuid).unwrap();
+fn load_assets(mut world: &mut World) {
+    world.resource_scope(|world, mut ep_load_assets: Mut<EventProxy>| {
+        while let Some(source) = ep_load_assets.0.pop_front() {
+            info!("new asset requested {:?} - will load", source);
 
-            let full = asset_path.to_str().unwrap().to_owned() + asset_impl.0.as_str();
-            println!("TEST {}", full);
-            let untyped_handle = asset_server.load_untyped(full);
-            //let handle = asset_server.load(&full);
-            asset_management.push(AssetEntry {
-                source: source.0.clone(),
-                original: untyped_handle,
-                attached: None,
+            let untyped_handle =
+                world.resource_scope(|world, asset_registry: Mut<AssetRegistry>| {
+                    let uuid = Uuid::parse_str(source.type_uuid.as_str()).unwrap();
+                    let asset_impl = asset_registry.impls.get(&uuid).unwrap();
+                    asset_impl.0(&source, world)
+                });
+
+            world.resource_scope(|world, mut asset_management: Mut<AssetManagement>| {
+                info!("new asset pushed to mgmt {:?}", source);
+                asset_management.push(AssetEntry {
+                    source: source.0.clone(),
+                    original: untyped_handle,
+                    attached: None,
+                });
             });
         }
-    }
+    });
 }
 
 fn attach_assets(mut world: &mut World) {
@@ -1047,9 +1219,15 @@ fn attach_assets(mut world: &mut World) {
 
             world.resource_scope(|world, asset_server: Mut<AssetServer>| {
                 match asset_server.get_load_state(&entry.original) {
-                    LoadState::NotLoaded => { /*do nothing*/ }
+                    LoadState::NotLoaded => {
+                        println!("attaching simple asset {:?}", entry.source);
+                        world.resource_scope(|world, asset_registry: Mut<AssetRegistry>| {
+                            asset_registry.attach_asset(entry, world);
+                        });
+                    }
                     LoadState::Loading => { /*do nothing*/ }
                     LoadState::Loaded => {
+                        println!("attaching asset {:?}", entry.source);
                         world.resource_scope(|world, asset_registry: Mut<AssetRegistry>| {
                             asset_registry.attach_asset(entry, world);
                         });
@@ -1094,5 +1272,47 @@ fn handle_attach_asset<T: Asset + Clone>(assets: &mut Assets<T>, entry: &mut Ass
         println!("new asset attached {:?} - done processing", entry,);
     } else {
         error!("No asset for entry {:?}", entry)
+    }
+}
+
+fn add_simple_object(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut ev_add_simple_object: EventReader<AddSimpleObject>,
+    mut asset_source_list: ResMut<AssetSourceList>,
+) {
+    for event in ev_add_simple_object.iter() {
+        let mesh_handle = meshes.add(event.0.to_mesh());
+        if let Id(_, id) = mesh_handle.id() {
+            asset_source_list.0.push(AssetSource {
+                source_type: AssetSourceType::AsString(event.0.to_string()),
+                type_uuid: Mesh::TYPE_UUID.to_string(),
+                uid: id,
+            });
+        } else {
+            error!("AssetPathId handle is not supported yet");
+        }
+
+        let color = Color::rgb(0.7, 0.7, 0.7);
+        let material_handle = materials.add(color.into());
+        if let Id(_, id) = material_handle.id() {
+            asset_source_list.0.push(AssetSource {
+                source_type: AssetSourceType::AsString(ron::to_string(&color).unwrap()),
+                type_uuid: StandardMaterial::TYPE_UUID.to_string(),
+                uid: id,
+            });
+        } else {
+            error!("AssetPathId handle is not supported yet");
+        }
+
+        commands
+            .spawn(PbrBundle {
+                mesh: mesh_handle,
+                material: material_handle,
+                transform: Transform::from_xyz(0.0, 0.0, 0.0),
+                ..default()
+            })
+            .insert(Name::new(event.0.to_string()));
     }
 }
