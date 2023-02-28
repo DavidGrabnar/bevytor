@@ -19,7 +19,7 @@ use bevy::scene::serialize_ron;
 use bevy::utils::Uuid;
 use bevy_egui::egui::{Checkbox, Grid, Ui};
 use bevy_egui::{egui, EguiContext, EguiPlugin};
-use bevytor_core::tree::{Action, Tree};
+use bevytor_core::tree::{Action, HoverEntity, Tree};
 use bevytor_core::{get_label, show_ui_hierarchy, update_state_hierarchy, SelectedEntity};
 use serde::{Deserialize, Serialize};
 use std::any::{Any, TypeId};
@@ -342,6 +342,8 @@ struct SelectEntity(Entity);
 #[derive(Deref)]
 struct RemoveEntity(Entity);
 
+struct MoveEntity(Entity, Option<Entity>);
+
 #[derive(Default, Resource)]
 struct EventProxy(LinkedList<LoadAsset>);
 
@@ -574,6 +576,7 @@ impl Plugin for EditorPlugin {
             .add_event::<SaveProject>()
             .add_event::<SelectEntity>()
             .add_event::<RemoveEntity>()
+            .add_event::<MoveEntity>()
             .add_event::<AddSimpleObject>()
             .add_plugin(EguiPlugin)
             .add_startup_system(get_editor_state)
@@ -596,6 +599,7 @@ impl Plugin for EditorPlugin {
             .add_system(attach_assets)
             .add_system(add_simple_object)
             .add_system(remove_entity)
+            .add_system(move_entity)
             // .add_system(update_ui_registry)
             .add_system(system_update_state_hierarchy);
 
@@ -754,8 +758,16 @@ fn ui_inspect(
         egui::SidePanel::left("hierarchy").show(egui_context.ctx_mut(), |ui| {
             let editor_state = world.resource::<EditorState>();
             let response = show_ui_hierarchy(ui, &editor_state.tree);
-            if let Action::Selected(entity) = response {
-                world.send_event(SelectEntity(entity));
+            match response {
+                Action::Selected(entity) => world.send_event(SelectEntity(entity)),
+                Action::DragDrop(dragged, dropped) => {
+                    let parent = match dropped {
+                        HoverEntity::Root => None,
+                        HoverEntity::Node(entity) => Some(entity),
+                    };
+                    world.send_event(MoveEntity(dragged, parent))
+                }
+                Action::NoAction => {}
             }
 
             ui.separator();
@@ -1162,6 +1174,15 @@ fn select_entity(
 fn remove_entity(mut commands: Commands, mut ev_remove_entity: EventReader<RemoveEntity>) {
     for entity in ev_remove_entity.iter() {
         commands.entity(**entity).despawn_recursive();
+    }
+}
+
+fn move_entity(mut commands: Commands, mut ev_move_entity: EventReader<MoveEntity>) {
+    for entity in ev_move_entity.iter() {
+        match entity.1 {
+            Some(parent) => commands.entity(entity.0).set_parent(parent),
+            None => commands.entity(entity.0).remove_parent(),
+        };
     }
 }
 
