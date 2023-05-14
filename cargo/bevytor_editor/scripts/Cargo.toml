@@ -7,8 +7,8 @@ edition = "2021"
 crate-type = ["rlib", "dylib"]
 
 [dependencies]
-bevy = { version = "0.9.1" }
+bevy = { version = "0.10.1", features = ["bevy_dynamic_plugin"] }
 
 [features]
 default = []
-dynamic = ["bevy/dynamic"]
+dynamic = ["bevy/bevy_dynamic_plugin"]

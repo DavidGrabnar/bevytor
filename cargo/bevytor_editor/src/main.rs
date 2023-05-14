@@ -2,6 +2,7 @@ mod plugin;
 mod service;
 #[macro_use]
 mod error;
+mod scripts;
 mod ui;
 
 use crate::plugin::EditorPlugin;
@@ -10,11 +11,11 @@ use bevy::prelude::*;
 use bevy::reflect::{
     FromType, TypeData, TypeInfo, TypeRegistration, TypeRegistry, TypeRegistryArc,
 };
-use bevy::render::camera::{CameraProjection, Projection, ScalingMode, Viewport, WindowOrigin};
+use bevy::render::camera::{CameraProjection, Projection, ScalingMode, Viewport};
 use bevy::scene::serialize_ron;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::fs;
 use std::ops::Deref;
 use std::path::Path;
@@ -22,24 +23,36 @@ use std::thread::sleep;
 use std::time::Duration;
 // use bevytor_spy::plugin::SpyPlugin;
 
-use systems_hot::*;
+// use systems_hot::*;
 
-#[hot_lib_reloader::hot_module(dylib = "scripts")]
-mod systems_hot {
-    use bevy::prelude::*;
-    hot_functions_from_file!("scripts/src/lib.rs");
-}
+// #[hot_lib_reloader::hot_module(dylib = "scripts")]
+// mod systems_hot {
+//    use bevy::prelude::*;
+//    hot_functions_from_file!("scripts/src/lib.rs");
+//}
 
 fn main() {
-    App::new()
-        .register_type::<SkipSerialization>()
+    let mut app = App::new();
+    app.register_type::<SkipSerialization>()
         .add_plugins(DefaultPlugins)
-        .add_plugin(EditorPlugin::default())
-        // .add_system(test_hot_system)
-        // .add_startup_system(setup_scene) // TEST
-        // .add_system(bonk.exclusive_system())
-        // .add_system(honk.exclusive_system())
-        .run();
+        .add_plugin(EditorPlugin::default());
+    // .add_system(systems_hot::test_hot_system)
+    // .add_startup_system(setup_scene) // TEST
+    // .add_system(bonk.exclusive_system())
+    // .add_system(honk.exclusive_system())
+
+    //let runner = app.runner.as_ref();
+    //app.set_runner(|mut app: App| {
+    //    println!("in runner lol");
+    //    runner(app);
+    //});
+    println!("Main main: {:?}", TypeId::of::<Transform>());
+    /*unsafe {
+        app.load_plugin(
+            "C:\\Users\\grabn\\Documents\\Faks\\Bananana2\\scripts\\target\\debug\\scripts.dll",
+        );
+    }*/
+    app.run();
 }
 
 #[derive(Eq, PartialEq, Hash, Serialize, Deserialize)]

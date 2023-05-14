@@ -11,3 +11,4 @@ Cargo.lock
 
 .idea
 cargo/bevytor_editor/target
+cargo/bevytor_script/target

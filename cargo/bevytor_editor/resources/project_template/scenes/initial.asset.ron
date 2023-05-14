@@ -1,0 +1,52 @@
+[
+  (
+    source_type: AsString("Plane"),
+    type_uuid: "8ecbac0f-f545-4473-ad43-e1f4243af51e",
+    uid: 9274126780494902850,
+  ),
+  (
+    source_type: AsString("Cube"),
+    type_uuid: "8ecbac0f-f545-4473-ad43-e1f4243af51e",
+    uid: 14997970011285428877,
+  ),
+  (
+    source_type: AsString("Cube"),
+    type_uuid: "8ecbac0f-f545-4473-ad43-e1f4243af51e",
+    uid: 15114585820539629785,
+  ),
+  (
+    source_type: AsString("Rgba(red:0.3,green:0.5,blue:0.3,alpha:1.0)"),
+    type_uuid: "7494888b-c082-457b-aacf-517228cc0c22",
+    uid: 9399192938557672737,
+  ),
+  (
+    source_type: AsString("Rgba(red:0.7,green:0.6,blue:0.8,alpha:1.0)"),
+    type_uuid: "7494888b-c082-457b-aacf-517228cc0c22",
+    uid: 13487579056845269015,
+  ),
+  (
+    source_type: AsString("Rgba(red:0.8,green:0.7,blue:0.6,alpha:1.0)"),
+    type_uuid: "7494888b-c082-457b-aacf-517228cc0c22",
+    uid: 2626654359401176236,
+  ),
+  (
+    source_type: AsString("Sphere"),
+    type_uuid: "8ecbac0f-f545-4473-ad43-e1f4243af51e",
+    uid: 14386140639509282001,
+  ),
+  (
+    source_type: AsString("Rgba(red:0.04254278,green:0.8962363,blue:0.95721525,alpha:1.0)"),
+    type_uuid: "7494888b-c082-457b-aacf-517228cc0c22",
+    uid: 14671672144548495748,
+  ),
+  (
+    source_type: AsString("Sphere"),
+    type_uuid: "8ecbac0f-f545-4473-ad43-e1f4243af51e",
+    uid: 14863901203739330918,
+  ),
+  (
+    source_type: AsString("Rgba(red:0.7,green:0.7,blue:0.7,alpha:1.0)"),
+    type_uuid: "7494888b-c082-457b-aacf-517228cc0c22",
+    uid: 9873230118823015705,
+  ),
+]

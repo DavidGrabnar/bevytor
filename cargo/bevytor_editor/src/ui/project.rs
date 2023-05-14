@@ -6,7 +6,7 @@ use std::ffi::OsString;
 
 pub enum ProjectListAction {
     Create,
-    NewOpen(ProjectDescription),
+    NewOpen,
     ExistingOpen(ProjectDescription),
     ExistingRemove(ProjectDescription),
 }
@@ -22,24 +22,13 @@ pub fn project_list(
 ) -> EResult<Option<ProjectListAction>> {
     if project_row(ui, "➕", "Create a new project", None, false).is_some() {
         // ignore action as Remove cannot be returned if removable is false
-        println!("CLICK");
         return Ok(Some(ProjectListAction::Create));
     }
     ui.separator();
 
     if project_row(ui, "🗁", "Open an existing project", None, false).is_some() {
         // ignore action as Remove cannot be returned if removable is false
-        // TODO show file explorer with folder filter, mark folders with project files (check extension & validate format of main project file)
-        let path = OsString::from("~/Documents/sample_project");
-        let name = path.to_str().unwrap_or("").to_string();
-        if let Err(e) = Project::verify_existing(path.clone()) {
-            bail!("PROJECT::LIST::OPEN_EXISTING", e);
-        }
-        // TODO validate project file in selected dir
-        return Ok(Some(ProjectListAction::NewOpen(ProjectDescription {
-            name,
-            path,
-        })));
+        return Ok(Some(ProjectListAction::NewOpen));
     }
     if !projects.0.is_empty() {
         ui.separator();

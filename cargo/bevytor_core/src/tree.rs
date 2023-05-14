@@ -1,5 +1,5 @@
 use crate::tree::Action::NoAction;
-use bevy::prelude::{CursorIcon, Entity};
+use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_egui::egui::collapsing_header::CollapsingState;
 use bevy_egui::egui::emath::RectTransform;
@@ -42,7 +42,7 @@ impl Tree {
 
         if let Some(dragged) = context.drag_entity {
             if let Some(hovered) = context.hover_entity {
-                if ui.input().pointer.any_released() {
+                if ui.input(|ui| ui.pointer.any_released()) {
                     if let NoAction = action {
                         if let HoverEntity::Node(entity) = hovered {
                             if entity != dragged {
@@ -117,7 +117,7 @@ impl Node {
                     Action::NoAction
                 })
             });
-            let is_being_dragged = ui.memory().is_anything_being_dragged();
+            let is_being_dragged = ui.memory(|ui| ui.is_anything_being_dragged());
             if is_being_dragged && can_accept_what_is_being_dragged && response.response.hovered() {
                 let hover_entity = self
                     .0
@@ -165,7 +165,7 @@ impl Node {
                     }
                 }
             }
-            let is_being_dragged = ui.memory().is_anything_being_dragged();
+            let is_being_dragged = ui.memory(|ui| ui.is_anything_being_dragged());
             if is_being_dragged && can_accept_what_is_being_dragged && response.hovered() {
                 let hover_entity = self
                     .0
@@ -193,7 +193,7 @@ impl Node {
 }
 
 pub fn drag_source<R>(ui: &mut Ui, id: Id, body: impl FnOnce(&mut Ui) -> R) -> (bool, R) {
-    let is_being_dragged = ui.memory().is_being_dragged(id);
+    let is_being_dragged = ui.memory(|ui| ui.is_being_dragged(id));
 
     if !is_being_dragged {
         let inner_response = ui.scope(body);
@@ -201,11 +201,11 @@ pub fn drag_source<R>(ui: &mut Ui, id: Id, body: impl FnOnce(&mut Ui) -> R) -> (
         // Check for drags:
         let response = ui.interact(inner_response.response.rect, id, Sense::drag());
         if response.hovered() {
-            ui.ctx().output().cursor_icon = egui::CursorIcon::Grab;
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         (false, inner_response.inner)
     } else {
-        ui.ctx().output().cursor_icon = egui::CursorIcon::Grabbing;
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
 
         // Paint the body to a new layer:
         let layer_id = LayerId::new(Order::Tooltip, id);
@@ -224,7 +224,7 @@ pub fn drop_target<R>(
     can_accept_what_is_being_dragged: bool,
     body: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    let is_being_dragged = ui.memory().is_anything_being_dragged();
+    let is_being_dragged = ui.memory(|ui| ui.is_anything_being_dragged());
 
     let response = body(ui);
     response

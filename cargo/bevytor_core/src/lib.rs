@@ -7,11 +7,11 @@ use crate::tree::{Node, Tree};
 use bevy::ecs::entity::Entities;
 use bevy::prelude::*;
 use bevy_egui::egui::{DragValue, Grid};
-use bevy_egui::{egui, EguiContext};
+use bevy_egui::{egui, EguiContext, EguiContexts};
 use std::collections::HashMap;
 
 pub fn setup_ui_hierarchy(
-    mut egui_context: ResMut<EguiContext>,
+    mut egui_context: EguiContexts,
     query_hierarchy: Query<(Entity, Option<&Parent>, Option<&Children>, Option<&Name>)>,
     query_selected_entity: Query<Entity, With<SelectedEntity>>,
     mut commands: Commands,
@@ -70,7 +70,7 @@ pub fn show_ui_hierarchy(ui: &mut egui::Ui, tree: &tree::Tree) -> tree::Action {
 }
 
 pub fn setup_ui_inspector(
-    mut egui_context: ResMut<EguiContext>,
+    mut egui_context: EguiContexts,
     mut query_selected_entity: Query<
         (Option<&mut Transform>, Option<&Handle<StandardMaterial>>),
         With<SelectedEntity>,

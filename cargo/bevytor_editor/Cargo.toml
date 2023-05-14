@@ -1,6 +1,6 @@
-[workspace]
-resolver = "2"
-members = ["scripts"]
+# [workspace]
+# resolver = "2"
+# members = ["projects"]
 
 [package]
 name = "bevytor_editor"
@@ -9,18 +9,21 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# keep deps synced with plugins, some dependencies can cause changes in typeId
 [dependencies]
-bevytor_core = { path = "../bevytor_core", version = "0.1.0" }
-scripts = { path = "scripts" }
-bevy = { version = "0.9.1", features = [] } #"dynamic"
-bevy_egui = "0.18.0"
-native-dialog = "0.6.3"
+bevy = { version = "0.10.1", features = ["bevy_dynamic_plugin"] }
+# for the love of god don't use relative path as different path changes the typeId
+bevytor_core = { path = "C:/Users/grabn/Documents/Faks/bevytor/cargo/bevytor_core", version = "0.1.0" }
+bevytor_script = { path = "C:/Users/grabn/Documents/Faks/bevytor/cargo/bevytor_script", version = "0.1.0" }
+bevy_egui = "0.20.2"
 serde = "1.0.144"
 serde_json = "1.0.85"
 ron = "0.8"
 hot-lib-reloader = { version = "0.6.4" }
 dirs = "4.0.0"
 sysinfo = "0.27.1"
+libloading = "0.7.4"
+regex = "1.7.3"
 
 #[features]
 #default = []

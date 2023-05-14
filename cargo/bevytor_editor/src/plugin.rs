@@ -6,34 +6,46 @@ General TODOs:
 use crate::bail;
 use crate::error::{EResult, Error};
 use crate::plugin::AssetSourceType::AsFile;
+use crate::scripts::ScriptableRegistry;
 use crate::service::existing_projects::ExistingProjects;
 use crate::service::project::{Project, ProjectDescription};
 use crate::ui::project::{project_list, ProjectListAction};
+use bevy::app::{AppLabel, CreatePlugin, SubApp};
 use bevy::asset::HandleId::Id;
 use bevy::asset::{Asset, HandleId};
+use bevy::ecs::archetype::Archetypes;
+use bevy::ecs::component::{Components, TableStorage};
 use bevy::ecs::entity::{Entities, EntityMap};
-use bevy::ecs::event::Event;
+use bevy::ecs::storage::Storages;
+use bevy::ecs::system::Command;
 use bevy::prelude::*;
 use bevy::reflect::{ReflectMut, TypeUuid};
+use bevy::render::RenderPlugin;
 use bevy::scene::serialize_ron;
+use bevy::utils::tracing::Instrument;
 use bevy::utils::Uuid;
-use bevy_egui::egui::{Checkbox, Grid, Ui};
-use bevy_egui::{egui, EguiContext, EguiPlugin};
+use bevy::window::PrimaryWindow;
+use bevy_egui::egui::{Checkbox, ComboBox, Grid, Ui};
+use bevy_egui::{egui, EguiContext, EguiContexts, EguiPlugin};
 use bevytor_core::tree::{Action, HoverEntity, Tree};
 use bevytor_core::{get_label, show_ui_hierarchy, update_state_hierarchy, SelectedEntity};
+use bevytor_script::{ComponentRegistry, CreateScript, Script};
+use libloading::{Library, Symbol};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::any::{Any, TypeId};
+use std::any::{type_name, Any, TypeId};
 use std::collections::{HashMap, HashSet, LinkedList};
-use std::ffi::OsString;
-use std::fmt;
-use std::fmt::Formatter;
-use std::ops::Deref;
+use std::ffi::{OsStr, OsString};
+use std::fmt::Pointer;
+use std::ops::Index;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use sysinfo::{RefreshKind, SystemExt};
 
 pub struct EditorPlugin {
     widgets: Vec<Box<dyn Widget + Sync + Send>>,
+    //app: std::sync::Arc<App>,
 }
 
 impl Default for EditorPlugin {
@@ -54,11 +66,19 @@ pub struct EditorState {
     new_project_popup_shown: bool,
     new_project_name: String,
     new_project_path: String,
+    playing: bool,
+    initial: bool,
+    dynamic_scene_handle: Option<Handle<DynamicScene>>,
+
+    existing_project_popup_shown: bool,
+    existing_project_path: String,
+
     system_info: sysinfo::System,
 }
 
 impl Default for EditorState {
     fn default() -> Self {
+        let world = World::new();
         Self {
             existing_projects: Default::default(),
             current_file_explorer_path: Default::default(),
@@ -67,7 +87,12 @@ impl Default for EditorState {
             new_project_popup_shown: false,
             new_project_name: "".to_string(),
             new_project_path: "".to_string(),
+            existing_project_popup_shown: false,
+            existing_project_path: "".to_string(),
             system_info: sysinfo::System::new_with_specifics(RefreshKind::new().with_disks_list()),
+            playing: false,
+            initial: true,
+            dynamic_scene_handle: None,
         }
     }
 }
@@ -95,6 +120,7 @@ impl Default for InspectRegistry {
         new.skipped.insert(TypeId::of::<SelectedEntity>());
 
         new.register::<f32>();
+        new.register::<u64>();
         new.register::<bool>();
         new.register::<Vec3>();
         new.register::<Quat>();
@@ -261,6 +287,12 @@ impl Inspectable for Quat {
     }
 }
 
+impl Inspectable for u64 {
+    fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
+        UiRegistry::ui_num(self, ui);
+    }
+}
+
 impl Inspectable for f32 {
     fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
         UiRegistry::ui_num(self, ui);
@@ -330,12 +362,45 @@ impl Widget for Hierarchy {
     }
 }
 
+#[derive(Default)]
+enum LoadProjectStep {
+    #[default]
+    NONE,
+    SCRIPTS(bool),
+    ASSETS(usize),
+    SCENE(Handle<DynamicScene>, bool),
+    DONE,
+}
+
+#[derive(Default, Resource)]
+struct LoadProjectProgress(LoadProjectStep);
+
 struct LoadProject(Project);
+struct PreSaveProject();
 struct SaveProject();
 struct LoadScene(Handle<DynamicScene>);
 
-#[derive(Resource, Default)]
-struct LoadSceneFlag(Option<Handle<DynamicScene>>);
+impl Command for LoadScene {
+    fn write(self, world: &mut World) {
+        println!("loaded scene");
+        world.resource_scope(|world, dynamic_scenes: Mut<Assets<DynamicScene>>| {
+            if let Some(scene) = dynamic_scenes.get(&self.0) {
+                println!("Will attach scene to world");
+                scene
+                    .write_to_world(world, &mut EntityMap::default())
+                    .unwrap();
+                println!("Attached scene to world");
+
+                world.resource_scope(|world, mut editor_state: Mut<EditorState>| {
+                    editor_state.dynamic_scene_handle = Some(self.0.clone());
+                });
+            }
+        });
+    }
+}
+
+#[derive(Component, Default, Reflect, Serialize, Deserialize)]
+struct OriginalEntityId(u32);
 
 struct SelectEntity(Entity);
 
@@ -344,11 +409,39 @@ struct RemoveEntity(Entity);
 
 struct MoveEntity(Entity, Option<Entity>);
 
-#[derive(Default, Resource)]
-struct EventProxy(LinkedList<LoadAsset>);
-
 #[derive(Deref, Debug, Clone)]
 struct LoadAsset(AssetSource);
+
+impl Command for LoadAsset {
+    fn write(self, world: &mut World) {
+        info!("new asset requested {:?} - will load", self.0);
+
+        let untyped_handle = world.resource_scope(|world, asset_registry: Mut<AssetRegistry>| {
+            let uuid = Uuid::parse_str(self.0.type_uuid.as_str()).unwrap();
+            let asset_impl = asset_registry.impls.get(&uuid).unwrap();
+            asset_impl.0(&self.0, world)
+        });
+
+        world.resource_scope(|world, mut asset_management: Mut<AssetManagement>| {
+            info!("new asset pushed to mgmt {:?}", self.0);
+            asset_management.push(AssetEntry {
+                source: self.0.clone(),
+                original: untyped_handle,
+                attached: None,
+            });
+        });
+
+        world.resource_scope(
+            |world, mut load_project_progress: Mut<LoadProjectProgress>| {
+                if let LoadProjectStep::ASSETS(asset_count) = &load_project_progress.0 {
+                    load_project_progress.0 = LoadProjectStep::ASSETS(asset_count - 1);
+                } else {
+                    error!("Progress on LoadAsset is not STEP::ASSET! Should not happen")
+                }
+            },
+        );
+    }
+}
 
 #[derive(Default, Resource)]
 struct AssetSourceList(Vec<AssetSource>);
@@ -530,7 +623,10 @@ impl SimpleObject {
     fn to_mesh(&self) -> Mesh {
         match self {
             SimpleObject::Cube => Mesh::from(shape::Cube { size: 1.0 }),
-            SimpleObject::Plane => Mesh::from(shape::Plane { size: 1.0 }),
+            SimpleObject::Plane => Mesh::from(shape::Plane {
+                size: 1.0,
+                subdivisions: 0,
+            }),
             SimpleObject::Sphere => Mesh::from(shape::UVSphere {
                 radius: 1.0,
                 sectors: 10,
@@ -560,24 +656,73 @@ impl UiRegistry {
     }
 }
 
+#[derive(Resource, Default)]
+pub struct LogBuffer(LinkedList<String>);
+
+const LOG_SIZE: usize = 100;
+
+impl LogBuffer {
+    fn write(&mut self, content: String) {
+        if self.0.len() == LOG_SIZE {
+            self.0.pop_front();
+        }
+        self.0.push_back(content);
+    }
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, AppLabel)]
+pub struct TestSubApp;
+
+static mut LOAD_FLAG: bool = false;
+
 impl Plugin for EditorPlugin {
     fn build(&self, app: &mut App) {
+        /*let mut sub_app_app = App::empty();
+        sub_app_app.add_simple_outer_schedule();
+        sub_app_app.init_schedule(CoreSchedule::Main);
+        println!("Added default plugins");
+        let mut sub_app = SubApp::new(sub_app_app, |world: &mut World, app2: &mut App| {
+            unsafe {
+                if !LOAD_FLAG {
+                    println!("wroom plugin");
+                    app2.load_plugin(
+                        "C:\\Users\\grabn\\Documents\\Test-project\\plugins\\target\\debug\\pluginlib.dll",
+                    );
+                    LOAD_FLAG = true;
+                }
+            }
+            //app.update();
+        });*/
+        /*sub_app.set_runner(|mut app: App| {
+            println!("runner plugin");
+        });*/
+
+        /*let runner = app.runner.clone();
+        app.set_runner(move |mut app: App| {
+            println!("in runner lol");
+            // runner(app);
+        });*/
+
         app.init_resource::<AssetManagement>()
             .init_resource::<InspectRegistry>()
             .init_resource::<EditorState>()
             .init_resource::<UiRegistry>()
-            .init_resource::<EventProxy>()
-            .init_resource::<LoadSceneFlag>()
             .init_resource::<AssetRegistry>()
             .init_resource::<AssetSourceList>()
+            .init_resource::<ScriptableRegistry>()
+            .init_resource::<ComponentRegistry>()
+            .init_resource::<LogBuffer>()
+            .init_resource::<LoadProjectProgress>()
             .add_event::<LoadProject>()
-            .add_event::<LoadScene>()
-            .add_event::<LoadAsset>()
+            .add_event::<AddComponent>()
+            .add_event::<LoadScript>()
+            .add_event::<PreSaveProject>()
             .add_event::<SaveProject>()
             .add_event::<SelectEntity>()
             .add_event::<RemoveEntity>()
             .add_event::<MoveEntity>()
             .add_event::<AddSimpleObject>()
+            .add_event::<ResetWorldEvent>()
             .add_plugin(EguiPlugin)
             .add_startup_system(get_editor_state)
             // Ensure order of UI systems execution!
@@ -590,124 +735,42 @@ impl Plugin for EditorPlugin {
             // )
             .add_system(ui_inspect)
             .add_system(load_project)
-            .add_system(load_scene_proxy)
-            .add_system(load_scene)
-            .add_system(load_assets_proxy)
-            .add_system(load_assets)
+            .add_system(load_project_step)
+            .add_system(pre_save_project)
             .add_system(save_project)
             .add_system(select_entity)
             .add_system(attach_assets)
             .add_system(add_simple_object)
             .add_system(remove_entity)
             .add_system(move_entity)
+            .add_system(reset_world)
             // .add_system(update_ui_registry)
-            .add_system(system_update_state_hierarchy);
+            //.add_system(|| {})
+            .add_system(load_scripts)
+            .add_system(process_scripts)
+            .add_system(system_update_state_hierarchy)
+            .add_system(add_components)
+            //.register_type::<CursorIcon>()
+            //.register_type::<bevy::window::CursorGrabMode>()
+            //.register_type::<bevy::window::CompositeAlphaMode>()
+            //.register_type::<Option<bevy::math::DVec2>>()
+            //.register_type::<Option<bool>>()
+            //.register_type::<Option<f64>>()
+            //.register_type::<bevy::window::WindowLevel>()
+            .register_type::<Rect>()
+            .register_type::<OriginalEntityId>()
+            .register_type_data::<OriginalEntityId, ReflectSerialize>()
+            .register_type_data::<OriginalEntityId, ReflectDeserialize>()
+            .register_type_data::<OriginalEntityId, ReflectComponent>()
+            .register_type_data::<Rect, ReflectSerialize>()
+            .register_type_data::<Rect, ReflectDeserialize>();
+        //.insert_sub_app(TestSubApp, sub_app);
 
         // for widget in self.widgets {
         //     app.add_system(widget.update_state);
         // }
     }
 }
-
-fn ui_menu(mut egui_context: ResMut<EguiContext>, mut ev_load_asset: EventWriter<LoadAsset>) {
-    egui::TopBottomPanel::top("menu_bar").show(egui_context.ctx_mut(), |ui| {
-        egui::menu::bar(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("Organize windows").clicked() {
-                    ui.ctx().memory().reset_areas();
-                    ui.close_menu();
-                }
-                if ui
-                    .button("Reset egui memory")
-                    .on_hover_text("Forget scroll, positions, sizes etc")
-                    .clicked()
-                {
-                    *ui.ctx().memory() = Default::default();
-                    ui.close_menu();
-                }
-            });
-        });
-    });
-}
-
-// TODO fix to immutable state & handle mut via events
-/*fn ui_project_management(
-    mut egui_context: ResMut<EguiContext>,
-    mut editor_state: ResMut<EditorState>,
-    mut ev_load_project: EventWriter<LoadProject>,
-) {
-    if editor_state.current_project.is_none() {
-        egui::Window::new("Select project")
-            .collapsible(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(egui_context.ctx_mut(), |ui| {
-                let res = project_list(ui, &editor_state.existing_projects).unwrap();
-                if let Some(action) = res {
-                    match action {
-                        ProjectListAction::Create => {
-                            /*Window::new("Select new project directory")
-                            .open(open)
-                            .resizable(false)
-                            .show(ctx, |ui| {
-                                use super::View as _;
-                                self.ui(ui);
-                            });*/
-
-                            // TODO show panel with name and location select - file explorer with folder filter, project folder name is slug of project name (can be modified)
-                            let path = OsString::from(
-                                "C:\\Users\\grabn\\Documents\\Faks\\bevytor\\das_demo",
-                            );
-                            let name = "Das demo".to_string();
-                            Project::verify_new(path.clone()).unwrap();
-                            let description = ProjectDescription { name, path };
-                            Project::generate(description.clone()).unwrap();
-                            editor_state
-                                .existing_projects
-                                .add(description.clone())
-                                .unwrap();
-                            ev_load_project.send(LoadProject(Project::load(description).unwrap()));
-                        }
-                        ProjectListAction::NewOpen(description) => {
-                            editor_state
-                                .existing_projects
-                                .add(description.clone())
-                                .unwrap();
-                            ev_load_project.send(LoadProject(Project::load(description).unwrap()));
-                        }
-                        ProjectListAction::ExistingOpen(description) => {
-                            ev_load_project.send(LoadProject(Project::load(description).unwrap()));
-                        }
-                        ProjectListAction::ExistingRemove(description) => {
-                            editor_state.existing_projects.remove(&description).unwrap();
-                        }
-                    }
-                };
-            });
-    }
-}*/
-/*
-fn ui_hierarchy(
-    mut egui_context: ResMut<EguiContext>,
-    editor_state: Res<EditorState>,
-    mut ev_select_entity: EventWriter<SelectEntity>,
-) {
-    egui::SidePanel::left("hierarchy").show(egui_context.ctx_mut(), |ui| {
-        let response = show_ui_hierarchy(ui, &editor_state.tree);
-        if let Action::Selected(entity) = response {
-            ev_select_entity.send(SelectEntity(entity));
-        }
-
-        ui.separator();
-    });
-}
-
-fn ui_file_explorer(mut egui_context: ResMut<EguiContext>, editor_state: Res<EditorState>) {
-    egui::TopBottomPanel::bottom("file_explorer").show(egui_context.ctx_mut(), |ui| {
-        if editor_state.current_project.is_some() {
-            show_ui_file_editor(ui, editor_state.current_file_explorer_path.as_path()).unwrap();
-        }
-    });
-}*/
 
 fn ui_inspect(
     world: &mut World,
@@ -720,43 +783,51 @@ fn ui_inspect(
     // entities: &Entities,
     // mut type_registry_arc: Mut<TypeRegistryArc>
 ) {
-    world.resource_scope(|world, mut egui_context: Mut<EguiContext>| {
-        egui::TopBottomPanel::top("menu_bar").show(egui_context.ctx_mut(), |ui| {
-            egui::menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Organize windows").clicked() {
-                        ui.ctx().memory().reset_areas();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Reset egui memory")
-                        .on_hover_text("Forget scroll, positions, sizes etc")
-                        .clicked()
-                    {
-                        *ui.ctx().memory() = Default::default();
-                        ui.close_menu();
-                    }
-                    if ui.button("Save project").clicked() {
-                        world.send_event(SaveProject());
-                        ui.close_menu();
-                    }
-                });
-                ui.menu_button("Objects", |ui| {
-                    if ui.button("Cube").clicked() {
-                        world.send_event(AddSimpleObject(SimpleObject::Cube));
-                    }
-                    if ui.button("Plane").clicked() {
-                        world.send_event(AddSimpleObject(SimpleObject::Plane));
-                    }
-                    if ui.button("Sphere").clicked() {
-                        world.send_event(AddSimpleObject(SimpleObject::Sphere));
-                    }
-                });
+    let mut egui_context_query = world.query_filtered::<&mut EguiContext, With<PrimaryWindow>>();
+    let mut egui_context_mut = egui_context_query.get_single_mut(world).unwrap();
+
+    //let src = EguiContext::default();
+    //let mut dst = std::mem::replace(&mut *egui_context_mut, src);
+    let egui_context = &egui_context_mut.get_mut().clone();
+    //let egui_context = dst.get_mut();
+    //let egui_context = egui_context_mut.get_mut();
+    //world.resource_scope(|world: &mut World, mut egui_context: EguiContexts| {
+    egui::TopBottomPanel::top("menu_bar").show(egui_context, |ui| {
+        egui::menu::bar(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Organize windows").clicked() {
+                    ui.ctx().memory_mut(|ui| ui.reset_areas());
+                    ui.close_menu();
+                }
+                if ui
+                    .button("Reset egui memory")
+                    .on_hover_text("Forget scroll, positions, sizes etc")
+                    .clicked()
+                {
+                    ui.ctx().memory_mut(|ui| *ui = Default::default());
+                    ui.close_menu();
+                }
+                if ui.button("Save project").clicked() {
+                    world.send_event(PreSaveProject());
+                    ui.close_menu();
+                }
+            });
+            ui.menu_button("Objects", |ui| {
+                if ui.button("Cube").clicked() {
+                    world.send_event(AddSimpleObject(SimpleObject::Cube));
+                }
+                if ui.button("Plane").clicked() {
+                    world.send_event(AddSimpleObject(SimpleObject::Plane));
+                }
+                if ui.button("Sphere").clicked() {
+                    world.send_event(AddSimpleObject(SimpleObject::Sphere));
+                }
             });
         });
+    });
 
-        egui::SidePanel::left("hierarchy").show(egui_context.ctx_mut(), |ui| {
-            let editor_state = world.resource::<EditorState>();
+    egui::SidePanel::left("hierarchy").show(egui_context, |ui| {
+        world.resource_scope(|world, editor_state: Mut<EditorState>| {
             let response = show_ui_hierarchy(ui, &editor_state.tree);
             match response {
                 Action::Selected(entity) => world.send_event(SelectEntity(entity)),
@@ -771,342 +842,472 @@ fn ui_inspect(
             }
 
             ui.separator();
-        });
-
-        egui::SidePanel::right("inspector").show(egui_context.ctx_mut(), |ui| {
-            // show_ui_hierarchy(ui, &editor_state.tree);
-
-            if let Ok((entity, name)) = world
-                .query_filtered::<(Entity, Option<&Name>), With<SelectedEntity>>()
-                .get_single_mut(world)
-            {
-                let label = get_label(entity, name);
-                ui.horizontal(|ui| {
-                    ui.label(label);
+            ui.separator();
+            ui.label("Scripts");
+            ui.separator();
+            if let Some(project) = &editor_state.current_project {
+                // currently, only one script per project is available
+                // script === dynamic lib from project dir
+                if project.project_state.script_enabled {
+                    ui.label("Script (dylib)");
+                    if ui.button("⟲").clicked() {
+                        // TODO recompile & reattach script
+                    }
                     if ui.button("❌").clicked() {
-                        world.send_event(RemoveEntity(entity));
-                    }
-                });
-                //     let type_registry = type_registry_arc.read();
-                //
-                let mut component_type_ids = Vec::new();
-                for archetype in world.archetypes().iter() {
-                    let mut found = false;
-                    for archetype_entity in archetype.entities() {
-                        if archetype_entity.entity() == entity {
-                            found = true;
-                        }
-                    }
-                    if found {
-                        for component_id in archetype.components() {
-                            let comp_info = world.components().get_info(component_id).unwrap();
-                            component_type_ids
-                                .push((comp_info.type_id().unwrap(), comp_info.name().to_string()));
-                            // if let Some(comp_info) = world.components().get_info(component_id) {
-                            //     println!("ITER {} {}", comp_info.name(), component_id.index());
-                            //     let comp_type_id = comp_info.type_id().unwrap();
-                            //     if let Some(inspectable) = inspect_registry.inspectables.get(&comp_type_id) {
-                            //         let registration = type_registry.get(comp_type_id).unwrap();
-                            //         if let Some(reflect_component) = registration.data::<ReflectComponent>() {
-                            //             // reflect_component.reflect_mut(world, entity);
-                            //         }
-                            //         // inspectable(transform.into_inner(), ui);
-                            //     }
-                            // }
-                        }
-                        break;
+                        // TODO remove script
                     }
                 }
+                if !project.project_state.script_enabled && ui.button("Load script ➕").clicked() {
+                    let path = Path::new(&project.project_description.path).join("scripts");
 
-                world.resource_scope(|world, inspect_registry: Mut<InspectRegistry>| {
-                    world.resource_scope(|world, type_registry_arc: Mut<AppTypeRegistry>| {
-                        // let mut entity_mut = world.entity_mut(entity);
-                        for (component_type_id, component_name) in component_type_ids {
-                            // TODO is this even possible ???
-                            // let component = entity_mut.get_mut_by_id(component_id).unwrap();
-                            // inspect_registry.exec(&mut component.into_inner().as_ptr() as &mut dyn Any, ui);
-
-                            // if let Some(callback) = inspect_registry.impls.get(&component_id.type_id()) {
-
-                            let type_registry = type_registry_arc.read();
-                            if let Some(registration) = type_registry.get(component_type_id) {
-                                let reflect_component =
-                                    registration.data::<ReflectComponent>().unwrap();
-
-                                let context = &mut Context {
-                                    world,
-                                    registry: &inspect_registry,
-                                    collapsible: Some(
-                                        component_name.rsplit_once(':').unwrap().1.to_string(),
-                                    ),
-                                };
-                                let reflect = reflect_component.reflect_mut(world, entity).unwrap();
-                                inspect_registry
-                                    .exec_reflect(reflect.into_inner(), ui, context)
-                                    .unwrap();
-                            } else {
-                                // println!("NOT IN TYPE REGISTRY {:?}: {}", component_type_id, component_name);
-                            }
-
-                            // callback(reflect.as_any_mut(), ui);
-                            // }
-                        }
-                    });
-                });
-            }
-
-            // world.resource_scope(|world, inspect_registry: Mut<InspectRegistry>| {
-            //     // THIS WORKS!!
-            //     if let Ok(mut transform) = world.query_filtered::<&mut Transform, With<SelectedEntity>>().get_single_mut(world) {
-            //             inspect_registry.exec(transform.as_any_mut(), ui);
-            //     }
-            // });
-            //
-            // for transform in transform_query.iter_mut() {
-            //     let inspectable = inspect_registry.inspectables.get(&TypeId::of::<Transform>()).unwrap();
-            //     inspectable(transform.into_inner(), ui);
-            // }
-            ui.separator();
-        });
-
-        world.resource_scope(|world, mut editor_state: Mut<EditorState>| {
-            if editor_state.current_project.is_none() {
-                egui::Window::new("Select project")
-                    .collapsible(false)
-                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                    .show(egui_context.ctx_mut(), |ui| {
-                        let res = project_list(ui, &editor_state.existing_projects).unwrap();
-                        if let Some(action) = res {
-                            match action {
-                                ProjectListAction::Create => {
-                                    editor_state.new_project_popup_shown = true;
-                                    editor_state.new_project_name = "Project".to_string();
-                                    let home_dir = dirs::home_dir().unwrap();
-                                    editor_state.new_project_path =
-                                        home_dir.to_str().unwrap().to_string();
-                                }
-                                ProjectListAction::NewOpen(description) => {
-                                    editor_state
-                                        .existing_projects
-                                        .add(description.clone())
-                                        .unwrap();
-                                    world.send_event(LoadProject(
-                                        Project::load(description).unwrap(),
-                                    ));
-                                }
-                                ProjectListAction::ExistingOpen(description) => {
-                                    world.send_event(LoadProject(
-                                        Project::load(description).unwrap(),
-                                    ));
-                                }
-                                ProjectListAction::ExistingRemove(description) => {
-                                    editor_state.existing_projects.remove(&description).unwrap();
-                                }
-                            }
-                        };
-                    });
-
-                if editor_state.new_project_popup_shown {
-                    // TODO default path
-                    let home_dir = dirs::home_dir().unwrap();
-                    let desktop_dir = dirs::desktop_dir().unwrap();
-                    egui::Window::new("Create new project")
-                        .collapsible(false)
-                        .show(egui_context.ctx_mut(), |ui| {
-                            // TODO as grid
-                            // TODO set location final folder to name as slug, if location not yet modified!
-                            ui.horizontal(|ui| {
-                                ui.label("Name");
-                                // TODO fix text edit
-                                ui.add(egui::TextEdit::singleline(
-                                    &mut editor_state.new_project_name,
-                                ));
-                            });
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                ui.label("Location");
-                                // TODO must sync with file explorer
-                                ui.add_enabled(
-                                    true,
-                                    egui::TextEdit::singleline(&mut editor_state.new_project_path),
-                                );
-                                //ui.text_edit_singleline(&mut path);
-                            });
-                            /*ui.horizontal(|ui| {
-                                // TODO - fix icons
-                                if ui.button("➕").clicked() {
-                                    // TODO update tree
-                                    editor_state.new_project_path =
-                                        home_dir.to_str().unwrap().to_string();
-                                }
-                                if ui.button("➕").clicked() {
-                                    // TODO update tree
-                                    editor_state.new_project_path =
-                                        desktop_dir.to_str().unwrap().to_string();
-                                }
-                                if ui.button("➕").clicked() {
-                                    // TODO new folder
-                                }
-                                if ui.button("➕").clicked() {
-                                    // TODO delete folder
-                                }
-                                if ui.button("➕").clicked() {
-                                    // TODO refresh
-                                }
-                                if ui.button("➕").clicked() {
-                                    // TODO show hidden folders
-                                }
-                            });
-                            ui.separator();
-                            // TODO background for file explorer
-                            egui::ScrollArea::vertical()
-                                .max_height(300.0)
-                                .show(ui, |ui| {
-                                    ui.vertical(|ui| {
-                                        for disk in editor_state.system_info.disks() {
-                                            let root = disk.mount_point().to_str().unwrap();
-                                            explorer_row(
-                                                ui,
-                                                root,
-                                                editor_state.new_project_path.as_str(),
-                                            );
-                                        }
-                                    });
-                                }); */
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                if ui.button("Cancel").clicked() {
-                                    editor_state.new_project_popup_shown = false;
-                                }
-                                if ui.button("Create").clicked() {
-                                    let path =
-                                        OsString::from(editor_state.new_project_path.as_str());
-                                    let name = editor_state.new_project_name.clone();
-                                    Project::verify_new(path.clone()).unwrap();
-                                    let description = ProjectDescription { name, path };
-                                    Project::generate(description.clone()).unwrap();
-                                    editor_state
-                                        .existing_projects
-                                        .add(description.clone())
-                                        .unwrap();
-                                    world.send_event(LoadProject(
-                                        Project::load(description).unwrap(),
-                                    ));
-                                }
-                            });
-                        });
+                    world.send_event(LoadScript(path.display().to_string()))
                 }
             }
         });
     });
+
+    egui::SidePanel::right("inspector").show(egui_context, |ui| {
+        // show_ui_hierarchy(ui, &editor_state.tree);
+
+        if let Ok((entity, name)) = world
+            .query_filtered::<(Entity, Option<&Name>), With<SelectedEntity>>()
+            .get_single_mut(world)
+        {
+            let label = get_label(entity, name);
+            ui.horizontal(|ui| {
+                ui.label(label);
+                if ui.button("❌").clicked() {
+                    world.send_event(RemoveEntity(entity));
+                }
+            });
+            //     let type_registry = type_registry_arc.read();
+            //
+            let mut component_type_ids = Vec::new();
+            for archetype in world.archetypes().iter() {
+                let mut found = false;
+                for archetype_entity in archetype.entities() {
+                    if archetype_entity.entity() == entity {
+                        found = true;
+                    }
+                }
+                if found {
+                    for component_id in archetype.components() {
+                        let comp_info = world.components().get_info(component_id).unwrap();
+                        component_type_ids
+                            .push((comp_info.type_id().unwrap(), comp_info.name().to_string()));
+                        // if let Some(comp_info) = world.components().get_info(component_id) {
+                        //     println!("ITER {} {}", comp_info.name(), component_id.index());
+                        //     let comp_type_id = comp_info.type_id().unwrap();
+                        //     if let Some(inspectable) = inspect_registry.inspectables.get(&comp_type_id) {
+                        //         let registration = type_registry.get(comp_type_id).unwrap();
+                        //         if let Some(reflect_component) = registration.data::<ReflectComponent>() {
+                        //             // reflect_component.reflect_mut(world, entity);
+                        //         }
+                        //         // inspectable(transform.into_inner(), ui);
+                        //     }
+                        // }
+                    }
+                    break;
+                }
+            }
+
+            world.resource_scope(|world, inspect_registry: Mut<InspectRegistry>| {
+                world.resource_scope(|world, type_registry_arc: Mut<AppTypeRegistry>| {
+                    // let mut entity_mut = world.entity_mut(entity);
+                    for (component_type_id, component_name) in component_type_ids {
+                        // TODO is this even possible ???
+                        // let component = entity_mut.get_mut_by_id(component_id).unwrap();
+                        // inspect_registry.exec(&mut component.into_inner().as_ptr() as &mut dyn Any, ui);
+
+                        // if let Some(callback) = inspect_registry.impls.get(&component_id.type_id()) {
+
+                        let type_registry = type_registry_arc.read();
+                        if let Some(registration) = type_registry.get(component_type_id) {
+                            let reflect_component =
+                                registration.data::<ReflectComponent>().unwrap();
+
+                            let context = &mut Context {
+                                world,
+                                registry: &inspect_registry,
+                                collapsible: Some(
+                                    component_name.rsplit_once(':').unwrap().1.to_string(),
+                                ),
+                            };
+                            let mut entity_mut = world.get_entity_mut(entity).unwrap();
+                            let reflect = reflect_component.reflect_mut(&mut entity_mut).unwrap();
+                            inspect_registry
+                                .exec_reflect(reflect.into_inner(), ui, context)
+                                .unwrap();
+                        } else {
+                            // println!("NOT IN TYPE REGISTRY {:?}: {}", component_type_id, component_name);
+                        }
+
+                        // callback(reflect.as_any_mut(), ui);
+                        // }
+                    }
+                });
+            });
+            ui.separator();
+            ui.menu_button("Add component ➕", |ui| {
+                // TODO add fixed elements (if not already on entity) (transform, light, etc.) besides script components
+                world.resource_scope(|world, registry: Mut<ComponentRegistry>| {
+                    for (id, (name, _)) in registry.reg.iter() {
+                        if ui.button(name).clicked() {
+                            world.send_event(AddComponent(entity, id.clone()));
+                        }
+                    }
+                });
+            });
+        }
+        ui.separator();
+    });
+
+    egui::TopBottomPanel::top("controls").show(egui_context, |ui| {
+        world.resource_scope(|world, mut editor_state: Mut<EditorState>| {
+            ui.horizontal(|ui| {
+                if !editor_state.playing && ui.button("▶").clicked() {
+                    editor_state.playing = true;
+                }
+                if editor_state.playing && ui.button("⏸").clicked() {
+                    editor_state.playing = false;
+                }
+                if !editor_state.initial && ui.button("■").clicked() {
+                    world.send_event(ResetWorldEvent);
+                }
+            });
+        });
+    });
+
+    egui::TopBottomPanel::bottom("logs").show(egui_context, |ui| {
+        let log_buffer = world.resource::<LogBuffer>();
+        for entry in log_buffer.0.iter() {
+            ui.label(entry);
+        }
+    });
+
+    world.resource_scope(|world, mut editor_state: Mut<EditorState>| {
+        if editor_state.current_project.is_none() {
+            egui::Window::new("Select project")
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(egui_context, |ui| {
+                    let res = project_list(ui, &editor_state.existing_projects).unwrap();
+                    if let Some(action) = res {
+                        match action {
+                            ProjectListAction::Create => {
+                                editor_state.new_project_popup_shown = true;
+                                editor_state.new_project_name = "Project".to_string();
+                                let home_dir = dirs::home_dir().unwrap();
+                                editor_state.new_project_path =
+                                    home_dir.to_str().unwrap().to_string();
+                            }
+                            ProjectListAction::NewOpen => {
+                                editor_state.existing_project_popup_shown = true;
+                                let home_dir = dirs::home_dir().unwrap();
+                                editor_state.existing_project_path =
+                                    home_dir.to_str().unwrap().to_string();
+                            }
+                            ProjectListAction::ExistingOpen(description) => {
+                                world.send_event(LoadProject(Project::load(description).unwrap()));
+                            }
+                            ProjectListAction::ExistingRemove(description) => {
+                                editor_state.existing_projects.remove(&description).unwrap();
+                            }
+                        }
+                    };
+                });
+
+            if editor_state.new_project_popup_shown {
+                // TODO default path
+                let home_dir = dirs::home_dir().unwrap();
+                let desktop_dir = dirs::desktop_dir().unwrap();
+                egui::Window::new("Create new project")
+                    .collapsible(false)
+                    .show(egui_context, |ui| {
+                        // TODO as grid
+                        // TODO set location final folder to name as slug, if location not yet modified!
+                        ui.horizontal(|ui| {
+                            ui.label("Name");
+                            // TODO fix text edit
+                            ui.add(egui::TextEdit::singleline(
+                                &mut editor_state.new_project_name,
+                            ));
+                        });
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("Location");
+                            // TODO must sync with file explorer
+                            ui.add_enabled(
+                                true,
+                                egui::TextEdit::singleline(&mut editor_state.new_project_path),
+                            );
+                            //ui.text_edit_singleline(&mut path);
+                        });
+                        /*ui.horizontal(|ui| {
+                            // TODO - fix icons
+                            if ui.button("➕").clicked() {
+                                // TODO update tree
+                                editor_state.new_project_path =
+                                    home_dir.to_str().unwrap().to_string();
+                            }
+                            if ui.button("➕").clicked() {
+                                // TODO update tree
+                                editor_state.new_project_path =
+                                    desktop_dir.to_str().unwrap().to_string();
+                            }
+                            if ui.button("➕").clicked() {
+                                // TODO new folder
+                            }
+                            if ui.button("➕").clicked() {
+                                // TODO delete folder
+                            }
+                            if ui.button("➕").clicked() {
+                                // TODO refresh
+                            }
+                            if ui.button("➕").clicked() {
+                                // TODO show hidden folders
+                            }
+                        });
+                        ui.separator();
+                        // TODO background for file explorer
+                        egui::ScrollArea::vertical()
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    for disk in editor_state.system_info.disks() {
+                                        let root = disk.mount_point().to_str().unwrap();
+                                        explorer_row(
+                                            ui,
+                                            root,
+                                            editor_state.new_project_path.as_str(),
+                                        );
+                                    }
+                                });
+                            }); */
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                editor_state.new_project_popup_shown = false;
+                            }
+                            if ui.button("Create").clicked() {
+                                let path = OsString::from(editor_state.new_project_path.as_str());
+                                let name = editor_state.new_project_name.clone();
+                                Project::verify_new(path.clone()).unwrap();
+                                let description = ProjectDescription { name, path };
+                                Project::generate(description.clone()).unwrap();
+                                editor_state
+                                    .existing_projects
+                                    .add(description.clone())
+                                    .unwrap();
+                                world.send_event(LoadProject(Project::load(description).unwrap()));
+                            }
+                        });
+                    });
+            } else if editor_state.existing_project_popup_shown {
+                // TODO default path
+                egui::Window::new("Open existing project")
+                    .collapsible(false)
+                    .show(egui_context, |ui| {
+                        // TODO as grid
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("Location");
+                            // TODO must sync with file explorer
+                            ui.add_enabled(
+                                true,
+                                egui::TextEdit::singleline(&mut editor_state.new_project_path),
+                            );
+                            //ui.text_edit_singleline(&mut path);
+                        });
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                editor_state.existing_project_popup_shown = false;
+                            }
+                            if ui.button("Create").clicked() {
+                                let path = OsString::from(editor_state.new_project_path.as_str());
+                                let name = editor_state.new_project_name.clone();
+                                Project::verify_existing(path.clone()).unwrap();
+                                let description = ProjectDescription { name, path };
+                                editor_state
+                                    .existing_projects
+                                    .add(description.clone())
+                                    .unwrap();
+                                world.send_event(LoadProject(Project::load(description).unwrap()));
+                            }
+                        });
+                    });
+            }
+        }
+    });
+    //});
+    //let mut blank = std::mem::replace(&mut *egui_context_mut, dst);
 }
 
-// fn update_ui_registry(mut res_context: ResMut<EguiContext>, mut res_ui_registry: ResMut<UiRegistry>) {
-//     let egui_context = res_context.ctx_mut();
-//
-//     egui::SidePanel::left("hierarchy")
-//         .show(egui_context, |ui| {
-//             res_ui_registry.registry.insert(UiReference::Hierarchy, ui);
-//         });
-// }
+struct AddComponent(Entity, TypeId);
+
+fn add_components(
+    mut events: EventReader<AddComponent>,
+    component_registry: Res<ComponentRegistry>,
+    mut commands: Commands,
+) {
+    for event in events.iter() {
+        let entity = event.0;
+        let component_type_id = event.1;
+        println!("Add component {:?} to {:?}", component_type_id, entity);
+        if let Some((_, callback)) = &component_registry.reg.get(&component_type_id) {
+            let mut cmd = commands.entity(entity);
+            callback(&mut cmd);
+        } else {
+            error!("Component {:?} not found", component_type_id);
+        }
+    }
+}
 
 fn load_project(
     mut editor_state: ResMut<EditorState>,
     mut ev_load_project: EventReader<LoadProject>,
-    asset_server: Res<AssetServer>,
-    mut ev_load_asset: EventWriter<LoadAsset>,
-    mut ev_load_scene: EventWriter<LoadScene>,
-    mut asset_source_list: ResMut<AssetSourceList>,
+    mut load_project_progress: ResMut<LoadProjectProgress>,
+    mut commands: Commands,
 ) {
     // Only take one instance of LoadProject event - multiple events should not happen
     if let Some(event) = ev_load_project.iter().next() {
-        let project_scene_path = Path::new(event.0.project_description.path.as_os_str())
-            .join("scenes")
-            .join(event.0.project_state.scene_file.clone());
-
-        let project_asset_path = Path::new(event.0.project_description.path.as_os_str())
-            .join("scenes")
-            .join(event.0.project_state.asset_file.clone());
-        println!(
-            "LOAD PROJECT {:?} - {:?}",
-            project_scene_path, project_asset_path
-        );
-
-        let c = Color::rgb(0.7, 0.7, 0.7);
-        let x = AssetSource {
-            source_type: AssetSourceType::AsString(serialize_ron(c).unwrap()),
-            type_uuid: "asdasd".to_string(),
-            uid: 1234,
-        };
-        println!("TEST {}", serialize_ron(x).unwrap());
-
-        let asset_entries: Vec<AssetSource> = ron::from_str(
-            std::fs::read_to_string(project_asset_path)
-                .unwrap()
-                .as_str(),
-        )
-        .unwrap();
-
-        println!("{:?}", asset_entries);
-
-        for entry in asset_entries {
-            asset_source_list.0.push(entry.clone());
-            ev_load_asset.send(LoadAsset(entry));
-        }
-
-        ev_load_scene.send(LoadScene(asset_server.load(project_scene_path)));
-
-        /*commands.spawn(DynamicSceneBundle {
-            scene: asset_server.load(project_scene_path),
-            ..default()
-        });*/
-        // TODO serialize camera
-        // Manually add a camera as it cannot be serialized at the moment ... No idea why, try when serialization update is released
-        /*commands.spawn_bundle(Camera3dBundle {
-            projection: Projection::Orthographic(OrthographicProjection {
-                // Why so small scale?
-                scale: 0.01,
-                ..default()
-            }),
-            transform: Transform::from_xyz(5.0, 5.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-            ..default()
-        });*/
-
-        // TODO dynamically load resources
-        /*let _handle_material1 = materials.set(
-            HandleId::Id(
-                Uuid::from_str("7494888b-c082-457b-aacf-517228cc0c22").unwrap(),
-                9399192938557672737,
-            ),
-            Color::rgb(0.3, 0.5, 0.3).into(),
-        );
-        let _handle_material2 = materials.set(
-            HandleId::Id(
-                Uuid::from_str("7494888b-c082-457b-aacf-517228cc0c22").unwrap(),
-                13487579056845269015,
-            ),
-            Color::rgb(0.8, 0.7, 0.6).into(),
-        );
-        let _handle_material3 = materials.set(
-            HandleId::Id(
-                Uuid::from_str("7494888b-c082-457b-aacf-517228cc0c22").unwrap(),
-                2626654359401176236,
-            ),
-            Color::rgb(0.6, 0.7, 0.8).into(),
-        );
-
-        force_keep.standard_materials.push(_handle_material1);
-        force_keep.standard_materials.push(_handle_material2);
-        force_keep.standard_materials.push(_handle_material3);*/
+        println!("LOAD PROJECT");
 
         let project: Project = event.0.clone();
         editor_state.current_file_explorer_path =
             PathBuf::from(project.project_description.path.clone());
         editor_state.current_project = Some(project);
+
+        load_project_progress.0 = LoadProjectStep::SCRIPTS(false);
+
+        if event.0.project_state.script_enabled {
+            let path = Path::new(&event.0.project_description.path).join("scripts");
+            commands.add(AttachScript(path.display().to_string()));
+        }
     }
 
     if ev_load_project.iter().next().is_some() {
         warn!("Multiple LoadProjects events found in listener! Should not happen");
+    }
+}
+
+fn load_project_step(
+    mut editor_state: ResMut<EditorState>,
+    mut load_project_progress: ResMut<LoadProjectProgress>,
+    mut asset_source_list: ResMut<AssetSourceList>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    if let Some(project) = &editor_state.current_project {
+        match load_project_progress.0 {
+            LoadProjectStep::NONE => {
+                // do nothing
+            }
+            LoadProjectStep::SCRIPTS(done) => {
+                if !done {
+                    info!("STEP - Progress loading script");
+                } else {
+                    info!("STEP - Finished loading script");
+                    info!("STEP - Starting loading assets");
+                    let project_asset_path =
+                        Path::new(project.project_description.path.as_os_str())
+                            .join("scenes")
+                            .join(project.project_state.asset_file.clone());
+
+                    let asset_entries: Vec<AssetSource> = ron::from_str(
+                        std::fs::read_to_string(project_asset_path)
+                            .unwrap()
+                            .as_str(),
+                    )
+                    .unwrap();
+
+                    println!("{:?}", asset_entries);
+
+                    let asset_count = asset_entries.len();
+                    for entry in asset_entries {
+                        asset_source_list.0.push(entry.clone());
+                        commands.add(LoadAsset(entry));
+                    }
+
+                    load_project_progress.0 = LoadProjectStep::ASSETS(asset_count);
+                }
+            }
+            LoadProjectStep::ASSETS(left) => {
+                if left == 0 {
+                    info!("STEP - Finished loading assets");
+                    info!("STEP - Started loading scene");
+                    let project_scene_path =
+                        Path::new(project.project_description.path.as_os_str())
+                            .join("scenes")
+                            .join(project.project_state.scene_file.clone());
+
+                    println!("loading {}", project_scene_path.to_str().unwrap());
+                    let handle = asset_server.load(project_scene_path);
+                    load_project_progress.0 = LoadProjectStep::SCENE(handle, false);
+                } else {
+                    info!("STEP - Progress loading assets {} left", left);
+                }
+            }
+            LoadProjectStep::SCENE(ref handle, done) => {
+                if !done {
+                    info!("STEP - Progress loading scene");
+                    use bevy::asset::LoadState;
+
+                    match asset_server.get_load_state(handle.id()) {
+                        LoadState::Failed => {
+                            println!("FAILED to load scene! {:?}", handle);
+                            // one of our assets had an error
+                            load_project_progress.0 = LoadProjectStep::SCENE(handle.clone(), true);
+                        }
+                        LoadState::Loaded => {
+                            // all assets are now ready
+                            println!("Success - loaded scene, will attach! {:?}", handle);
+                            commands.add(LoadScene(handle.clone()));
+
+                            load_project_progress.0 = LoadProjectStep::SCENE(handle.clone(), true);
+                        }
+                        _ => {
+                            // NotLoaded/Loading: not fully ready yet
+                        }
+                    }
+                } else {
+                    info!("STEP - Finished loading scene");
+                    load_project_progress.0 = LoadProjectStep::DONE;
+                }
+            }
+            LoadProjectStep::DONE => {
+                // do nothing
+            }
+        }
+    }
+}
+
+fn pre_save_project(
+    mut ev_pre_save_project: EventReader<PreSaveProject>,
+    mut ev_save_project: EventWriter<SaveProject>,
+    query: Query<Entity>,
+    mut commands: Commands,
+) {
+    if let Some(_) = ev_pre_save_project.iter().next() {
+        for entity in query.iter() {
+            commands
+                .entity(entity)
+                .insert(OriginalEntityId(entity.index()));
+        }
+        commands.add(SaveProjectCommand);
+    }
+
+    if ev_pre_save_project.iter().next().is_some() {
+        warn!("Multiple PreSaveProject events found in listener! Should not happen");
+    }
+}
+
+struct SaveProjectCommand;
+
+impl Command for SaveProjectCommand {
+    fn write(self, world: &mut World) {
+        world.send_event(SaveProject());
     }
 }
 
@@ -1127,14 +1328,44 @@ fn save_project(
             let project_asset_path = Path::new(project.project_description.path.as_os_str())
                 .join("scenes")
                 .join(project.project_state.asset_file.clone());
+
+            let project_file_path =
+                Path::new(project.project_description.path.as_os_str()).join("project.bv");
+
             println!(
-                "SAVE PROJECT {:?} - {:?}",
-                project_scene_path, project_asset_path
+                "SAVE PROJECT {:?} - {:?} - {:?}",
+                project_scene_path, project_asset_path, project_file_path
             );
 
             //let type_registry = type_registry.read();
             let scene = DynamicScene::from_world(world, &type_registry);
             let scene_serialized = scene.serialize_ron(&type_registry).unwrap();
+
+            // TODO weird hack for transforming Rect type for area in OrthographicProjection
+            let scene_serialized = {
+                let re = Regex::new(r"area: \(\n +min: \(\n +x: ([+-]?\d+\.?\d*),\n +y: ([+-]?\d+\.?\d*),\n +\),\n +max: \(\n +x: ([+-]?\d+\.?\d*),\n +y: ([+-]?\d+\.?\d*),\n +\),\n +\),").unwrap();
+                let caps = re.captures(&scene_serialized).unwrap();
+                let replacement = r"area: (
+            min: (X1, Y1),
+            max: (X2, Y2),
+          ),";
+                let new_val = replacement
+                    .replace("X1", caps.get(1).unwrap().into())
+                    .replace("Y1", caps.get(2).unwrap().into())
+                    .replace("X2", caps.get(3).unwrap().into())
+                    .replace("Y2", caps.get(4).unwrap().into());
+
+                re.replace(&scene_serialized, new_val).to_string()
+            };
+            // TODO: weird hack to remove window entities
+            let scene_serialized = {
+                let re = Regex::new(
+                    r"\d+: \(\n.+\n +.bevy_window::window::Window.: \((\n.+){50}\n {4}\),\n {4}",
+                )
+                .unwrap();
+                println!("Window entities found: {}", re.captures_len());
+                re.replace_all(&scene_serialized, "").to_string()
+            };
 
             std::fs::write(project_scene_path, scene_serialized).unwrap();
 
@@ -1144,6 +1375,9 @@ fn save_project(
             }
             let assets_serialized = serialize_ron(&source_list_clone).unwrap();
             std::fs::write(project_asset_path, assets_serialized).unwrap();
+
+            let file_serialized = serde_json::to_string(&project).unwrap();
+            std::fs::write(project_file_path, file_serialized).unwrap();
         }
     }
 
@@ -1184,75 +1418,6 @@ fn move_entity(mut commands: Commands, mut ev_move_entity: EventReader<MoveEntit
             None => commands.entity(entity.0).remove_parent(),
         };
     }
-}
-
-// TODO use event listener in load_scene system
-// currently I cannot retrieve listener from world
-// temporarily replaced with resource option of event contents
-fn load_scene_proxy(
-    mut ev_load_scene: EventReader<LoadScene>,
-    mut load_scene_flag: ResMut<LoadSceneFlag>,
-) {
-    if let Some(event) = ev_load_scene.iter().next() {
-        load_scene_flag.0 = Some(event.0.clone())
-    }
-    // Only take one instance of SelectEntity event - multiple events should not happen
-    if ev_load_scene.iter().next().is_some() {
-        warn!("Multiple LoadScene events found in listener! Should not happen");
-    }
-}
-
-// Consider using Commands when world is needed
-// that might solve event proxy hack
-fn load_scene(world: &mut World) {
-    // TODO EventReader resource does not exist, figure out how to do it manually
-    world.resource_scope(|world, mut load_scene_flag: Mut<LoadSceneFlag>| {
-        if let Some(event) = &load_scene_flag.0 {
-            world.resource_scope(|world, mut dynamic_scenes: Mut<Assets<DynamicScene>>| {
-                if let Some(scene) = dynamic_scenes.get(event) {
-                    println!("Will load scene to world");
-                    scene
-                        .write_to_world(world, &mut EntityMap::default())
-                        .unwrap();
-                    println!("Loaded scene to world");
-                }
-            });
-            load_scene_flag.0 = None
-        }
-    });
-}
-
-fn load_assets_proxy(
-    mut er_load_assets: EventReader<LoadAsset>,
-    mut ep_load_assets: ResMut<EventProxy>,
-) {
-    for event in er_load_assets.iter() {
-        ep_load_assets.0.push_front(event.clone());
-    }
-}
-
-fn load_assets(mut world: &mut World) {
-    world.resource_scope(|world, mut ep_load_assets: Mut<EventProxy>| {
-        while let Some(source) = ep_load_assets.0.pop_front() {
-            info!("new asset requested {:?} - will load", source);
-
-            let untyped_handle =
-                world.resource_scope(|world, asset_registry: Mut<AssetRegistry>| {
-                    let uuid = Uuid::parse_str(source.type_uuid.as_str()).unwrap();
-                    let asset_impl = asset_registry.impls.get(&uuid).unwrap();
-                    asset_impl.0(&source, world)
-                });
-
-            world.resource_scope(|world, mut asset_management: Mut<AssetManagement>| {
-                info!("new asset pushed to mgmt {:?}", source);
-                asset_management.push(AssetEntry {
-                    source: source.0.clone(),
-                    original: untyped_handle,
-                    attached: None,
-                });
-            });
-        }
-    });
 }
 
 fn attach_assets(mut world: &mut World) {
@@ -1364,5 +1529,87 @@ fn add_simple_object(
                 ..default()
             })
             .insert(Name::new(event.0.to_string()));
+    }
+}
+
+fn process_scripts(world: &mut World) {
+    world.resource_scope(|world, mut registry: Mut<ScriptableRegistry>| {
+        world.resource_scope(|world, mut editor_state: Mut<EditorState>| {
+            if editor_state.playing {
+                registry.exec(world);
+                if editor_state.initial {
+                    editor_state.initial = false;
+                }
+            }
+        });
+    });
+}
+
+#[derive(Deref)]
+struct LoadScript(String);
+
+struct AttachScript(String);
+
+impl Command for AttachScript {
+    fn write(self, world: &mut World) {
+        world.resource_scope(|world, mut registry: Mut<ScriptableRegistry>| {
+            registry.load(world, self.0);
+        });
+        let mut editor = world.resource_mut::<EditorState>();
+        if let Some(ref mut project) = &mut editor.current_project {
+            project.project_state.script_enabled = true;
+        }
+        info!("Script loaded");
+        world.resource_scope(
+            |world, mut load_project_progress: Mut<LoadProjectProgress>| {
+                load_project_progress.0 = LoadProjectStep::SCRIPTS(true);
+            },
+        );
+    }
+}
+
+fn load_scripts(mut commands: Commands, mut events: EventReader<LoadScript>) {
+    for event in events.iter() {
+        commands.add(AttachScript(event.0.clone()))
+    }
+}
+
+struct ResetWorldEvent;
+
+struct ResetWorld;
+
+impl Command for ResetWorld {
+    fn write(self, world: &mut World) {
+        world.resource_scope(|world, mut editor_state: Mut<EditorState>| {
+            if let Some(handle) = &editor_state.dynamic_scene_handle {
+                world.resource_scope(|world, dynamic_scenes: Mut<Assets<DynamicScene>>| {
+                    if let Some(scene) = dynamic_scenes.get(handle) {
+                        println!("Will re-attach scene to world");
+                        let mut entity_map = EntityMap::default();
+                        let mut query_state = world.query::<(Entity, &OriginalEntityId)>();
+                        for (entity, original_id) in query_state.iter(world) {
+                            entity_map.insert(Entity::from_raw(original_id.0), entity);
+                        }
+                        println!("{:?}", entity_map);
+                        scene.write_to_world(world, &mut entity_map).unwrap();
+                        println!("Re-attached scene to world");
+                    } else {
+                        panic!("Dynamic scene not found!")
+                    }
+                });
+            } else {
+                panic!("Dynamic scene handle is None!")
+            }
+        });
+    }
+}
+
+fn reset_world(mut ev_reset_world: EventReader<ResetWorldEvent>, mut commands: Commands) {
+    if ev_reset_world.iter().next().is_some() {
+        commands.add(ResetWorld);
+    }
+
+    if ev_reset_world.iter().next().is_some() {
+        warn!("Multiple ResetWorldEvent events found in listener! Should not happen");
     }
 }

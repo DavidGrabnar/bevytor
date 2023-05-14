@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bevy = { version = "0.9.1", features = [] } #"dynamic"
-bevy_egui = "0.19.0"
-bevytor_spy = { path = "cargo/bevytor_spy", version = "0.1.0" }
-ron = "0.8.0"
-serde = "1.0.143"
+# libloading = "0.7.4"
+# bevytor_script = { path = "cargo/bevytor_script" }
+bevy = { version = "0.10.1", features = ["bevy_dynamic_plugin"] }
+bevy_egui = "0.20.2"
+# bevytor_core = { path = "cargo/bevytor_core" }

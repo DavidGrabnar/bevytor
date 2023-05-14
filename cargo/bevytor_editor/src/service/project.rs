@@ -10,6 +10,7 @@ use std::path::Path;
 use std::{fs, io};
 
 const EDITOR_ROOT_FOLDER_PATH: &str = env!("CARGO_MANIFEST_DIR");
+const TEMPLATE_PROJECT_DIR_PATH: &str = "resources/project_template";
 const INITIAL_TEMPLATE_SCENE_PATH: &str = "resources/initial.scn.ron";
 const INITIAL_TEMPLATE_ASSET_PATH: &str = "resources/initial.asset.ron";
 const INITIAL_ASSETS_PATH: &str = "resources/assets";
@@ -25,6 +26,7 @@ pub struct ProjectState {
     pub scene_file: String,
     pub asset_file: String,
     pub assets_folder: String,
+    pub script_enabled: bool,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -39,6 +41,7 @@ impl Default for ProjectState {
             scene_file: "initial.scn.ron".to_string(),
             asset_file: "initial.asset.ron".to_string(),
             assets_folder: "assets".to_string(),
+            script_enabled: false,
         }
     }
 }
@@ -100,14 +103,22 @@ impl Project {
             Err(e) => bail!("PROJECT::BUILD::CANNOT_SERIALIZE_PROJECT", e),
         };
 
+        //if let Err(e) = fs::create_dir(project_path.join("scenes")) {
+        //    bail!("PROJECT::BUILD::CANNOT_CREATE_SCENES_FOLDER", e);
+        //}
+
+        let template_project_dir_path =
+            Path::new(EDITOR_ROOT_FOLDER_PATH).join(TEMPLATE_PROJECT_DIR_PATH);
+
+        if let Err(e) = copy_recursively(template_project_dir_path, project_path) {
+            bail!("PROJECT::BUILD::CANNOT_COPY_TEMPLATE", e);
+        }
+
         if let Err(e) = fs::write(project_path.join("project.bv"), serialized) {
             bail!("PROJECT::BUILD::CANNOT_WRITE_TO_PROJECT_FILE", e);
         }
 
-        if let Err(e) = fs::create_dir(project_path.join("scenes")) {
-            bail!("PROJECT::BUILD::CANNOT_CREATE_SCENES_FOLDER", e);
-        }
-
+        /*
         let template_scene_path =
             Path::new(EDITOR_ROOT_FOLDER_PATH).join(INITIAL_TEMPLATE_SCENE_PATH);
 
@@ -171,7 +182,7 @@ impl Project {
                     }
                 }
             }
-        }
+        }*/
 
         // TODO cleanup on error ?
 
@@ -270,3 +281,17 @@ fn setup_template_pbr_bundle(
     }
 }
 */
+
+fn copy_recursively(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> io::Result<()> {
+    fs::create_dir_all(&destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let filetype = entry.file_type()?;
+        if filetype.is_dir() {
+            copy_recursively(entry.path(), destination.as_ref().join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), destination.as_ref().join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
