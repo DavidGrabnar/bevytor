@@ -24,6 +24,7 @@ dirs = "4.0.0"
 sysinfo = "0.27.1"
 libloading = "0.7.4"
 regex = "1.7.3"
+futures-lite = "1.13.0"
 
 #[features]
 #default = []

@@ -5,8 +5,9 @@ General TODOs:
 
 use crate::bail;
 use crate::error::{EResult, Error};
+use crate::logs::LogBuffer;
 use crate::plugin::AssetSourceType::AsFile;
-use crate::scripts::ScriptableRegistry;
+use crate::scripts::{handle_tasks, ScriptableRegistry};
 use crate::service::existing_projects::ExistingProjects;
 use crate::service::project::{Project, ProjectDescription};
 use crate::ui::project::{project_list, ProjectListAction};
@@ -363,7 +364,7 @@ impl Widget for Hierarchy {
 }
 
 #[derive(Default)]
-enum LoadProjectStep {
+pub enum LoadProjectStep {
     #[default]
     NONE,
     SCRIPTS(bool),
@@ -373,7 +374,7 @@ enum LoadProjectStep {
 }
 
 #[derive(Default, Resource)]
-struct LoadProjectProgress(LoadProjectStep);
+pub struct LoadProjectProgress(pub(crate) LoadProjectStep);
 
 struct LoadProject(Project);
 struct PreSaveProject();
@@ -656,20 +657,6 @@ impl UiRegistry {
     }
 }
 
-#[derive(Resource, Default)]
-pub struct LogBuffer(LinkedList<String>);
-
-const LOG_SIZE: usize = 100;
-
-impl LogBuffer {
-    fn write(&mut self, content: String) {
-        if self.0.len() == LOG_SIZE {
-            self.0.pop_front();
-        }
-        self.0.push_back(content);
-    }
-}
-
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, AppLabel)]
 pub struct TestSubApp;
 
@@ -750,6 +737,7 @@ impl Plugin for EditorPlugin {
             .add_system(process_scripts)
             .add_system(system_update_state_hierarchy)
             .add_system(add_components)
+            .add_system(handle_tasks)
             //.register_type::<CursorIcon>()
             //.register_type::<bevy::window::CursorGrabMode>()
             //.register_type::<bevy::window::CompositeAlphaMode>()
@@ -848,27 +836,28 @@ fn ui_inspect(
             if let Some(project) = &editor_state.current_project {
                 // currently, only one script per project is available
                 // script === dynamic lib from project dir
+                let path = Path::new(&project.project_description.path).join("scripts");
                 if project.project_state.script_enabled {
-                    ui.label("Script (dylib)");
-                    if ui.button("⟲").clicked() {
-                        // TODO recompile & reattach script
-                    }
-                    if ui.button("❌").clicked() {
-                        // TODO remove script
-                    }
-                }
-                if !project.project_state.script_enabled && ui.button("Load script ➕").clicked() {
-                    let path = Path::new(&project.project_description.path).join("scripts");
-
-                    world.send_event(LoadScript(path.display().to_string()))
+                    ui.horizontal(|ui| {
+                        ui.label("Script (dylib)");
+                        if ui.button("⟲").clicked() {
+                            world.send_event(LoadScript(path.display().to_string(), true))
+                        }
+                        if ui.button("❌").clicked() {
+                            world.resource_scope(|world, mut reg: Mut<ScriptableRegistry>| {
+                                reg.old_impls.clear();
+                            });
+                            // TODO remove script
+                        }
+                    });
+                } else if ui.button("Load script ➕").clicked() {
+                    world.send_event(LoadScript(path.display().to_string(), false))
                 }
             }
         });
     });
 
     egui::SidePanel::right("inspector").show(egui_context, |ui| {
-        // show_ui_hierarchy(ui, &editor_state.tree);
-
         if let Ok((entity, name)) = world
             .query_filtered::<(Entity, Option<&Name>), With<SelectedEntity>>()
             .get_single_mut(world)
@@ -880,8 +869,7 @@ fn ui_inspect(
                     world.send_event(RemoveEntity(entity));
                 }
             });
-            //     let type_registry = type_registry_arc.read();
-            //
+
             let mut component_type_ids = Vec::new();
             for archetype in world.archetypes().iter() {
                 let mut found = false;
@@ -895,17 +883,6 @@ fn ui_inspect(
                         let comp_info = world.components().get_info(component_id).unwrap();
                         component_type_ids
                             .push((comp_info.type_id().unwrap(), comp_info.name().to_string()));
-                        // if let Some(comp_info) = world.components().get_info(component_id) {
-                        //     println!("ITER {} {}", comp_info.name(), component_id.index());
-                        //     let comp_type_id = comp_info.type_id().unwrap();
-                        //     if let Some(inspectable) = inspect_registry.inspectables.get(&comp_type_id) {
-                        //         let registration = type_registry.get(comp_type_id).unwrap();
-                        //         if let Some(reflect_component) = registration.data::<ReflectComponent>() {
-                        //             // reflect_component.reflect_mut(world, entity);
-                        //         }
-                        //         // inspectable(transform.into_inner(), ui);
-                        //     }
-                        // }
                     }
                     break;
                 }
@@ -980,7 +957,7 @@ fn ui_inspect(
 
     egui::TopBottomPanel::bottom("logs").show(egui_context, |ui| {
         let log_buffer = world.resource::<LogBuffer>();
-        for entry in log_buffer.0.iter() {
+        for entry in log_buffer.iter() {
             ui.label(entry);
         }
     });
@@ -1183,7 +1160,7 @@ fn load_project(
 
         if event.0.project_state.script_enabled {
             let path = Path::new(&event.0.project_description.path).join("scripts");
-            commands.add(AttachScript(path.display().to_string()));
+            commands.add(AttachScript(path.display().to_string(), false));
         }
     }
 
@@ -1545,32 +1522,30 @@ fn process_scripts(world: &mut World) {
     });
 }
 
-#[derive(Deref)]
-struct LoadScript(String);
+struct LoadScript(String, bool);
 
-struct AttachScript(String);
+struct AttachScript(String, bool);
 
 impl Command for AttachScript {
     fn write(self, world: &mut World) {
         world.resource_scope(|world, mut registry: Mut<ScriptableRegistry>| {
-            registry.load(world, self.0);
+            if self.1 {
+                registry.reload(world, self.0);
+            } else {
+                registry.load(world, self.0);
+
+                let mut editor = world.resource_mut::<EditorState>();
+                if let Some(ref mut project) = &mut editor.current_project {
+                    project.project_state.script_enabled = true;
+                }
+            }
         });
-        let mut editor = world.resource_mut::<EditorState>();
-        if let Some(ref mut project) = &mut editor.current_project {
-            project.project_state.script_enabled = true;
-        }
-        info!("Script loaded");
-        world.resource_scope(
-            |world, mut load_project_progress: Mut<LoadProjectProgress>| {
-                load_project_progress.0 = LoadProjectStep::SCRIPTS(true);
-            },
-        );
     }
 }
 
 fn load_scripts(mut commands: Commands, mut events: EventReader<LoadScript>) {
     for event in events.iter() {
-        commands.add(AttachScript(event.0.clone()))
+        commands.add(AttachScript(event.0.clone(), event.1))
     }
 }
 
@@ -1584,21 +1559,18 @@ impl Command for ResetWorld {
             if let Some(handle) = &editor_state.dynamic_scene_handle {
                 world.resource_scope(|world, dynamic_scenes: Mut<Assets<DynamicScene>>| {
                     if let Some(scene) = dynamic_scenes.get(handle) {
-                        println!("Will re-attach scene to world");
                         let mut entity_map = EntityMap::default();
                         let mut query_state = world.query::<(Entity, &OriginalEntityId)>();
                         for (entity, original_id) in query_state.iter(world) {
                             entity_map.insert(Entity::from_raw(original_id.0), entity);
                         }
-                        println!("{:?}", entity_map);
                         scene.write_to_world(world, &mut entity_map).unwrap();
-                        println!("Re-attached scene to world");
                     } else {
-                        panic!("Dynamic scene not found!")
+                        error!("Dynamic scene not found!")
                     }
                 });
             } else {
-                panic!("Dynamic scene handle is None!")
+                error!("Dynamic scene handle is None!")
             }
         });
     }
