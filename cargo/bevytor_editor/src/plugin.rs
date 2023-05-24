@@ -177,23 +177,34 @@ impl InspectRegistry {
                 ReflectMut::Struct(val) => self.exec_reflect_struct(val, ui, context),
                 ReflectMut::TupleStruct(val) => self.exec_reflect_tuple_struct(val, ui, context),
                 ReflectMut::Tuple(_) => {
-                    todo!("WIP {}", value.type_name())
+                    // TODO
+                    ui.label(format!("WIP TUPLE {}", value.type_name()));
+                    Ok(())
                 }
                 ReflectMut::List(_) => {
-                    todo!("WIP {}", value.type_name())
+                    // TODO
+                    ui.label(format!("WIP LIST {}", value.type_name()));
+                    Ok(())
                 }
                 ReflectMut::Array(_) => {
-                    todo!("WIP {}", value.type_name())
+                    // TODO
+                    ui.label(format!("WIP ARRAY {}", value.type_name()));
+                    Ok(())
                 }
                 ReflectMut::Map(_) => {
-                    todo!("WIP {}", value.type_name())
+                    // TODO
+                    ui.label(format!("WIP MAP {}", value.type_name()));
+                    Ok(())
                 }
                 ReflectMut::Value(val) => {
-                    todo!("WIP {}", value.type_name());
-                    bail!("INSPECT_REGISTRY::EXEC::IMPL_NOT_FOUND");
+                    // TODO
+                    ui.label(format!("WIP VALUE {}", value.type_name()));
+                    Ok(())
                 }
                 ReflectMut::Enum(_) => {
-                    todo!("WIP {}", value.type_name())
+                    // TODO
+                    ui.label(format!("WIP ENUM {}", value.type_name()));
+                    Ok(())
                 }
             }
             // println!("NOTFOUND {:?}", type_id);
