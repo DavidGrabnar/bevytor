@@ -19,6 +19,7 @@ use bevy::ecs::component::{Components, TableStorage};
 use bevy::ecs::entity::{Entities, EntityMap};
 use bevy::ecs::storage::Storages;
 use bevy::ecs::system::Command;
+use bevy::pbr::wireframe::{Wireframe, WireframePlugin};
 use bevy::prelude::*;
 use bevy::reflect::{ReflectMut, TypeUuid};
 use bevy::render::RenderPlugin;
@@ -711,6 +712,7 @@ impl Plugin for EditorPlugin {
             .add_event::<AddSimpleObject>()
             .add_event::<ResetWorldEvent>()
             .add_plugin(EguiPlugin)
+            .add_plugin(WireframePlugin)
             .add_startup_system(get_editor_state)
             // Ensure order of UI systems execution!
             // .add_system_set(SystemSet::new()
@@ -1372,9 +1374,11 @@ fn select_entity(
     if let Some(event) = ev_select_entity.iter().next() {
         // Remove old selected
         if let Ok(entity) = existing_selected.get_single_mut() {
-            commands.entity(entity).remove::<SelectedEntity>();
+            commands
+                .entity(entity)
+                .remove::<(SelectedEntity, Wireframe)>();
         }
-        commands.entity(event.0).insert(SelectedEntity);
+        commands.entity(event.0).insert((SelectedEntity, Wireframe));
     }
 
     if ev_select_entity.iter().next().is_some() {
