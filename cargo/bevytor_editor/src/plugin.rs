@@ -3,46 +3,36 @@ General TODOs:
 - handle unwraps as errors
 */
 
-use crate::bail;
-use crate::error::{EResult, Error};
+use crate::error::EResult;
 use crate::logs::LogBuffer;
-use crate::plugin::AssetSourceType::AsFile;
 use crate::scripts::{handle_tasks, ScriptableRegistry};
 use crate::service::existing_projects::ExistingProjects;
 use crate::service::project::{Project, ProjectDescription};
 use crate::ui::project::{project_list, ProjectListAction};
-use bevy::app::{AppLabel, CreatePlugin, SubApp};
-use bevy::asset::HandleId::Id;
+use bevy::app::AppLabel;
 use bevy::asset::{Asset, HandleId};
-use bevy::ecs::archetype::Archetypes;
-use bevy::ecs::component::{Components, TableStorage};
 use bevy::ecs::entity::{Entities, EntityMap};
-use bevy::ecs::storage::Storages;
 use bevy::ecs::system::Command;
 use bevy::pbr::wireframe::{Wireframe, WireframePlugin};
 use bevy::prelude::*;
-use bevy::reflect::{ReflectMut, TypeUuid};
-use bevy::render::RenderPlugin;
+use bevy::reflect::{Array, List, ReflectMut, Tuple, TypeUuid};
 use bevy::scene::serialize_ron;
-use bevy::utils::tracing::Instrument;
 use bevy::utils::Uuid;
 use bevy::window::PrimaryWindow;
-use bevy_egui::egui::{Checkbox, ComboBox, Grid, Ui};
-use bevy_egui::{egui, EguiContext, EguiContexts, EguiPlugin};
+use bevy_egui::egui::{Checkbox, Grid, Ui};
+use bevy_egui::{egui, EguiContext, EguiPlugin};
+//use bevy_mod_picking::{PickableBundle, PickingCamera, PickingCameraBundle};
+//use bevy_transform_gizmo::{GizmoPickSource, GizmoSettings};
 use bevytor_core::tree::{Action, HoverEntity, Tree};
 use bevytor_core::{get_label, show_ui_hierarchy, update_state_hierarchy, SelectedEntity};
-use bevytor_script::{ComponentRegistry, CreateScript, Script};
-use libloading::{Library, Symbol};
+use bevytor_script::ComponentRegistry;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::any::{type_name, Any, TypeId};
-use std::collections::{HashMap, HashSet, LinkedList};
-use std::ffi::{OsStr, OsString};
-use std::fmt::Pointer;
-use std::ops::Index;
+use std::any::{Any, TypeId};
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 use sysinfo::{RefreshKind, SystemExt};
 
 pub struct EditorPlugin {
@@ -80,7 +70,6 @@ pub struct EditorState {
 
 impl Default for EditorState {
     fn default() -> Self {
-        let world = World::new();
         Self {
             existing_projects: Default::default(),
             current_file_explorer_path: Default::default(),
@@ -106,7 +95,7 @@ pub trait Widget {
 
 #[derive(Resource)]
 struct InspectRegistry {
-    impls: HashMap<TypeId, Box<fn(&mut dyn Any, &mut egui::Ui, &mut Context) -> ()>>,
+    impls: HashMap<TypeId, Box<fn(&mut dyn Any, &mut Ui, &mut Context) -> ()>>,
     skipped: HashSet<TypeId>,
 }
 
@@ -140,20 +129,18 @@ impl InspectRegistry {
         // println!("Register {:?}", TypeId::of::<T>());
         self.impls.insert(
             TypeId::of::<T>(),
-            Box::new(
-                |value: &mut dyn Any, ui: &mut egui::Ui, context: &mut Context| {
-                    // TODO can this usafe be avoided or elaborate on why it can be left here
-                    let casted: &mut T = unsafe { &mut *(value as *mut dyn Any as *mut T) };
-                    casted.ui(ui, context);
-                },
-            ),
+            Box::new(|value: &mut dyn Any, ui: &mut Ui, context: &mut Context| {
+                // TODO can this unsafe be avoided or elaborate on why it can be left here
+                let casted: &mut T = unsafe { &mut *(value as *mut dyn Any as *mut T) };
+                casted.ui(ui, context);
+            }),
         );
     }
 
     pub fn exec_reflect(
         &self,
         value: &mut dyn Reflect,
-        ui: &mut egui::Ui,
+        ui: &mut Ui,
         mut context: &mut Context,
     ) -> EResult<()> {
         // If type is registered, use UI impl, else use reflect to break it down
@@ -166,9 +153,10 @@ impl InspectRegistry {
             ui.separator();
             ui.collapsing(context.collapsible.as_ref().unwrap().clone(), |ui| {
                 context.collapsible = None;
-                self.exec_reflect(value, ui, &mut context);
-            });
-            Ok(())
+                self.exec_reflect(value, ui, &mut context)
+            })
+            .body_returned
+            .unwrap_or(Ok(()))
         } else if let Some(callback) = self.impls.get(&type_id) {
             callback(value.as_any_mut(), ui, context);
             Ok(())
@@ -324,7 +312,7 @@ impl Inspectable for Transform {
 }
 
 impl Inspectable for Vec2 {
-    fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
+    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
         ui.horizontal(|ui| {
             UiRegistry::ui_num(&mut self.x, ui);
             UiRegistry::ui_num(&mut self.y, ui);
@@ -333,7 +321,7 @@ impl Inspectable for Vec2 {
 }
 
 impl Inspectable for Vec3 {
-    fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
+    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
         ui.horizontal(|ui| {
             UiRegistry::ui_num(&mut self.x, ui);
             UiRegistry::ui_num(&mut self.y, ui);
@@ -343,7 +331,7 @@ impl Inspectable for Vec3 {
 }
 
 impl Inspectable for Quat {
-    fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
+    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
         ui.horizontal(|ui| {
             let (x, y, z) = self.to_euler(EulerRot::XYZ);
             let mut new_x = x.to_degrees();
@@ -353,7 +341,7 @@ impl Inspectable for Quat {
             UiRegistry::ui_num(&mut new_y, ui);
             UiRegistry::ui_num(&mut new_z, ui);
 
-            let (mut old_x, mut old_y, mut old_z) = self.to_euler(EulerRot::XYZ);
+            let (old_x, old_y, old_z) = self.to_euler(EulerRot::XYZ);
             if new_x != old_x || new_y != old_y || new_z != old_z {
                 let new = Quat::from_euler(
                     EulerRot::XYZ,
@@ -371,19 +359,19 @@ impl Inspectable for Quat {
 }
 
 impl Inspectable for u64 {
-    fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
+    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
         UiRegistry::ui_num(self, ui);
     }
 }
 
 impl Inspectable for f32 {
-    fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
+    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
         UiRegistry::ui_num(self, ui);
     }
 }
 
 impl Inspectable for bool {
-    fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
+    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
         ui.add(Checkbox::new(self, "TODO"));
     }
 }
@@ -405,7 +393,7 @@ impl<T: Asset + Reflect> Inspectable for Handle<T> {
 }
 
 impl Inspectable for StandardMaterial {
-    fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
+    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
         ui.horizontal(|ui| {
             ui.label("base_color");
             let mut color: [f32; 4] = self.base_color.into();
@@ -419,7 +407,7 @@ impl Inspectable for StandardMaterial {
 }
 
 impl Inspectable for Name {
-    fn ui(&mut self, ui: &mut Ui, _context: &mut Context) {
+    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
         self.mutate(|name| {
             ui.text_edit_singleline(name);
         });
@@ -438,7 +426,7 @@ pub struct Hierarchy {
 }
 
 impl Widget for Hierarchy {
-    fn show_ui(&self, ui: &mut Ui) {}
+    fn show_ui(&self, _: &mut Ui) {}
 
     fn update_state(&self) {
         println!("Update Widget Hierarchy")
@@ -448,11 +436,11 @@ impl Widget for Hierarchy {
 #[derive(Default)]
 pub enum LoadProjectStep {
     #[default]
-    NONE,
-    SCRIPTS(bool),
-    ASSETS(usize),
-    SCENE(Handle<DynamicScene>, bool),
-    DONE,
+    None,
+    Scripts(bool),
+    Assets(usize),
+    Scene(Handle<DynamicScene>, bool),
+    Done,
 }
 
 #[derive(Default, Resource)]
@@ -477,6 +465,24 @@ impl Command for LoadScene {
                 world.resource_scope(|world, mut editor_state: Mut<EditorState>| {
                     editor_state.dynamic_scene_handle = Some(self.0.clone());
                 });
+
+                /*let mut state1 =
+                    world.query_filtered::<(&GlobalTransform, &Camera), With<PickingCamera>>();
+                for result in state1.iter(world) {
+                    info!("found camera with pick");
+                }
+                let mut state = world.query_filtered::<Entity, With<Camera>>();
+                info!("before set check");
+                let camera = state.iter(world).next().unwrap();
+                if let Some(mut entity) = world.get_entity_mut(camera) {
+                    entity
+                        .insert(PickingCameraBundle::default())
+                        .insert(GizmoPickSource::default());
+                    info!("Added pick camera components")
+                }*/
+
+                //let mut gizmo_settings = world.resource_mut::<GizmoSettings>();
+                //gizmo_settings.enabled = true;
             }
         });
     }
@@ -516,8 +522,8 @@ impl Command for LoadAsset {
 
         world.resource_scope(
             |world, mut load_project_progress: Mut<LoadProjectProgress>| {
-                if let LoadProjectStep::ASSETS(asset_count) = &load_project_progress.0 {
-                    load_project_progress.0 = LoadProjectStep::ASSETS(asset_count - 1);
+                if let LoadProjectStep::Assets(asset_count) = &load_project_progress.0 {
+                    load_project_progress.0 = LoadProjectStep::Assets(asset_count - 1);
                 } else {
                     error!("Progress on LoadAsset is not STEP::ASSET! Should not happen")
                 }
@@ -611,7 +617,7 @@ impl AssetRegistry {
                                 assets.add(asset).clone_untyped()
                             })
                         }
-                        AssetSourceType::AsFile(filepath) => {
+                        AssetSourceType::AsFile(_) => {
                             /*let asset_path =
                                 Path::new(project.project_description.path.as_os_str())
                                     .join("scenes")
@@ -627,7 +633,7 @@ impl AssetRegistry {
                     source.source_type = match &source.source_type {
                         AssetSourceType::AsString(raw) => {
                             let uuid = Uuid::from_str(&source.type_uuid).unwrap();
-                            let handle = Handle::weak(Id(uuid, source.uid));
+                            let handle = Handle::weak(HandleId::Id(uuid, source.uid));
                             let assets = world.resource::<Assets<T>>();
                             let asset = assets.get(&handle).unwrap();
                             let new_raw = asset.to_string(raw.clone()).unwrap();
@@ -635,7 +641,7 @@ impl AssetRegistry {
                         }
                         AssetSourceType::AsFile(filepath) => {
                             // Do nothing as handle does not need to be updated at all
-                            AsFile(filepath.to_string())
+                            AssetSourceType::AsFile(filepath.to_string())
                         }
                     }
                 }),
@@ -783,32 +789,6 @@ static mut LOAD_FLAG: bool = false;
 
 impl Plugin for EditorPlugin {
     fn build(&self, app: &mut App) {
-        /*let mut sub_app_app = App::empty();
-        sub_app_app.add_simple_outer_schedule();
-        sub_app_app.init_schedule(CoreSchedule::Main);
-        println!("Added default plugins");
-        let mut sub_app = SubApp::new(sub_app_app, |world: &mut World, app2: &mut App| {
-            unsafe {
-                if !LOAD_FLAG {
-                    println!("wroom plugin");
-                    app2.load_plugin(
-                        "C:\\Users\\grabn\\Documents\\Test-project\\plugins\\target\\debug\\pluginlib.dll",
-                    );
-                    LOAD_FLAG = true;
-                }
-            }
-            //app.update();
-        });*/
-        /*sub_app.set_runner(|mut app: App| {
-            println!("runner plugin");
-        });*/
-
-        /*let runner = app.runner.clone();
-        app.set_runner(move |mut app: App| {
-            println!("in runner lol");
-            // runner(app);
-        });*/
-
         app.init_resource::<AssetManagement>()
             .init_resource::<InspectRegistry>()
             .init_resource::<EditorState>()
@@ -831,7 +811,10 @@ impl Plugin for EditorPlugin {
             .add_event::<ResetWorldEvent>()
             .add_plugin(EguiPlugin)
             .add_plugin(WireframePlugin)
+            //.add_plugins(bevy_mod_picking::DefaultPickingPlugins)
+            //.add_plugin(bevy_transform_gizmo::TransformGizmoPlugin::default())
             .add_startup_system(get_editor_state)
+            //.add_startup_system(disable_gizmo)
             // Ensure order of UI systems execution!
             // .add_system_set(SystemSet::new()
             //     .with_system(ui_menu)
@@ -1138,8 +1121,8 @@ fn ui_inspect(
 
             if editor_state.new_project_popup_shown {
                 // TODO default path
-                let home_dir = dirs::home_dir().unwrap();
-                let desktop_dir = dirs::desktop_dir().unwrap();
+                //let home_dir = dirs::home_dir().unwrap();
+                //let desktop_dir = dirs::desktop_dir().unwrap();
                 egui::Window::new("Create new project")
                     .collapsible(false)
                     .show(egui_context, |ui| {
@@ -1298,7 +1281,7 @@ fn load_project(
             PathBuf::from(project.project_description.path.clone());
         editor_state.current_project = Some(project);
 
-        load_project_progress.0 = LoadProjectStep::SCRIPTS(false);
+        load_project_progress.0 = LoadProjectStep::Scripts(false);
 
         if event.0.project_state.script_enabled {
             let path = Path::new(&event.0.project_description.path).join("scripts");
@@ -1320,10 +1303,10 @@ fn load_project_step(
 ) {
     if let Some(project) = &editor_state.current_project {
         match load_project_progress.0 {
-            LoadProjectStep::NONE => {
+            LoadProjectStep::None => {
                 // do nothing
             }
-            LoadProjectStep::SCRIPTS(done) => {
+            LoadProjectStep::Scripts(done) => {
                 if !done {
                     info!("STEP - Progress loading script");
                 } else {
@@ -1349,10 +1332,10 @@ fn load_project_step(
                         commands.add(LoadAsset(entry));
                     }
 
-                    load_project_progress.0 = LoadProjectStep::ASSETS(asset_count);
+                    load_project_progress.0 = LoadProjectStep::Assets(asset_count);
                 }
             }
-            LoadProjectStep::ASSETS(left) => {
+            LoadProjectStep::Assets(left) => {
                 if left == 0 {
                     info!("STEP - Finished loading assets");
                     info!("STEP - Started loading scene");
@@ -1363,12 +1346,12 @@ fn load_project_step(
 
                     println!("loading {}", project_scene_path.to_str().unwrap());
                     let handle = asset_server.load(project_scene_path);
-                    load_project_progress.0 = LoadProjectStep::SCENE(handle, false);
+                    load_project_progress.0 = LoadProjectStep::Scene(handle, false);
                 } else {
                     info!("STEP - Progress loading assets {} left", left);
                 }
             }
-            LoadProjectStep::SCENE(ref handle, done) => {
+            LoadProjectStep::Scene(ref handle, done) => {
                 if !done {
                     info!("STEP - Progress loading scene");
                     use bevy::asset::LoadState;
@@ -1377,14 +1360,14 @@ fn load_project_step(
                         LoadState::Failed => {
                             println!("FAILED to load scene! {:?}", handle);
                             // one of our assets had an error
-                            load_project_progress.0 = LoadProjectStep::SCENE(handle.clone(), true);
+                            load_project_progress.0 = LoadProjectStep::Scene(handle.clone(), true);
                         }
                         LoadState::Loaded => {
                             // all assets are now ready
                             println!("Success - loaded scene, will attach! {:?}", handle);
                             commands.add(LoadScene(handle.clone()));
 
-                            load_project_progress.0 = LoadProjectStep::SCENE(handle.clone(), true);
+                            load_project_progress.0 = LoadProjectStep::Scene(handle.clone(), true);
                         }
                         _ => {
                             // NotLoaded/Loading: not fully ready yet
@@ -1392,10 +1375,10 @@ fn load_project_step(
                     }
                 } else {
                     info!("STEP - Finished loading scene");
-                    load_project_progress.0 = LoadProjectStep::DONE;
+                    load_project_progress.0 = LoadProjectStep::Done;
                 }
             }
-            LoadProjectStep::DONE => {
+            LoadProjectStep::Done => {
                 // do nothing
             }
         }
@@ -1404,7 +1387,6 @@ fn load_project_step(
 
 fn pre_save_project(
     mut ev_pre_save_project: EventReader<PreSaveProject>,
-    mut ev_save_project: EventWriter<SaveProject>,
     query: Query<Entity>,
     mut commands: Commands,
 ) {
@@ -1514,17 +1496,13 @@ fn select_entity(
     if let Some(event) = ev_select_entity.iter().next() {
         // Remove old selected
         if let Ok((entity, fixed_wireframe)) = existing_selected.get_single_mut() {
-            commands
-                .entity(entity)
-                .remove::<(SelectedEntity, PickableBundle)>();
+            commands.entity(entity).remove::<SelectedEntity>();
 
             if fixed_wireframe.is_none() {
                 commands.entity(entity).remove::<Wireframe>();
             }
         }
-        commands
-            .entity(event.0)
-            .insert((SelectedEntity, Wireframe, PickableBundle::default()));
+        commands.entity(event.0).insert((SelectedEntity, Wireframe));
     }
 
     if ev_select_entity.iter().next().is_some() {
@@ -1597,6 +1575,10 @@ fn get_editor_state(mut editor_state: ResMut<EditorState>) {
     editor_state.existing_projects = ExistingProjects::load().unwrap();
 }
 
+/*fn disable_gizmo(mut gizmo_settings: ResMut<GizmoSettings>) {
+    gizmo_settings.enabled = false;
+}*/
+
 fn handle_attach_asset<T: Asset + Clone>(assets: &mut Assets<T>, entry: &mut AssetEntry) {
     let mut clone = None;
     if let Some(asset) = assets.get(&entry.original.clone().typed()) {
@@ -1628,7 +1610,7 @@ fn add_simple_object(
         match &event.0 {
             SimpleObject::MeshMaterial(mesh_material) => {
                 let mesh_handle = meshes.add(mesh_material.to_mesh());
-                if let Id(_, id) = mesh_handle.id() {
+                if let HandleId::Id(_, id) = mesh_handle.id() {
                     asset_source_list.0.push(AssetSource {
                         source_type: AssetSourceType::AsString(mesh_material.to_string()),
                         type_uuid: Mesh::TYPE_UUID.to_string(),
@@ -1640,7 +1622,7 @@ fn add_simple_object(
 
                 let color = Color::rgb(0.7, 0.7, 0.7);
                 let material_handle = materials.add(color.into());
-                if let Id(_, id) = material_handle.id() {
+                if let HandleId::Id(_, id) = material_handle.id() {
                     asset_source_list.0.push(AssetSource {
                         source_type: AssetSourceType::AsString(ron::to_string(&color).unwrap()),
                         type_uuid: StandardMaterial::TYPE_UUID.to_string(),
