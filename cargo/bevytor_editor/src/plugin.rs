@@ -1605,6 +1605,7 @@ fn add_simple_object(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut ev_add_simple_object: EventReader<AddSimpleObject>,
     mut asset_source_list: ResMut<AssetSourceList>,
+    mut ev_select_entity: EventWriter<SelectEntity>,
 ) {
     for event in ev_add_simple_object.iter() {
         match &event.0 {
@@ -1631,46 +1632,62 @@ fn add_simple_object(
                 } else {
                     error!("AssetPathId handle is not supported yet");
                 }
-                commands
+                let entity = commands
                     .spawn(PbrBundle {
                         mesh: mesh_handle,
                         material: material_handle,
                         transform: Transform::from_xyz(0.0, 0.0, 0.0),
                         ..default()
                     })
-                    .insert(Name::new(event.0.to_string()));
+                    .insert(Name::new(event.0.to_string()))
+                    .id();
+
+                ev_select_entity.send(SelectEntity(entity));
             }
             SimpleObject::Light(light) => {
                 let wireframe_mesh = Mesh::from(shape::Cube { size: 1.0 });
                 let wireframe_mesh_handle = meshes.add(wireframe_mesh);
                 let name = Name::new(light.to_string());
                 match &light {
+                    // WIP - spotlight has no effect - broken ???
                     Light::Spot => {
-                        commands.spawn((
-                            SpotLightBundle::default(),
-                            name,
-                            wireframe_mesh_handle,
-                            Wireframe,
-                            FixedWireframe,
-                        ));
+                        let entity = commands
+                            .spawn((
+                                SpotLightBundle::default(),
+                                name,
+                                wireframe_mesh_handle,
+                                Wireframe,
+                                FixedWireframe,
+                            ))
+                            .id();
+
+                        ev_select_entity.send(SelectEntity(entity));
                     }
                     Light::Point => {
-                        commands.spawn((
-                            PointLightBundle::default(),
-                            name,
-                            wireframe_mesh_handle,
-                            Wireframe,
-                            FixedWireframe,
-                        ));
+                        let entity = commands
+                            .spawn((
+                                PointLightBundle::default(),
+                                name,
+                                wireframe_mesh_handle,
+                                Wireframe,
+                                FixedWireframe,
+                            ))
+                            .id();
+
+                        ev_select_entity.send(SelectEntity(entity));
                     }
                     Light::Directional => {
-                        commands.spawn((
-                            DirectionalLightBundle::default(),
-                            name,
-                            wireframe_mesh_handle,
-                            Wireframe,
-                            FixedWireframe,
-                        ));
+                        let entity = commands
+                            .spawn((
+                                DirectionalLightBundle::default(),
+                                name,
+                                wireframe_mesh_handle,
+                                Wireframe,
+                                FixedWireframe,
+                            ))
+                            .id();
+
+                        ev_select_entity.send(SelectEntity(entity));
                     }
                     Light::Ambient => error!("WIP Ambient light"),
                 }
