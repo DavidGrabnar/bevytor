@@ -151,8 +151,8 @@ pub fn handle_tasks(world: &mut World) {
             logger.write("Script loading complete".to_string());
 
             let mut load_project_progress = world.resource_mut::<LoadProjectProgress>();
-            if let LoadProjectStep::SCRIPTS(false) = load_project_progress.0 {
-                load_project_progress.0 = LoadProjectStep::SCRIPTS(true);
+            if let LoadProjectStep::Scripts(false) = load_project_progress.0 {
+                load_project_progress.0 = LoadProjectStep::Scripts(true);
             }
         }
     });
