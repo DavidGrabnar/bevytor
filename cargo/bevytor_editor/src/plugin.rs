@@ -554,7 +554,7 @@ trait AssetSourceable {
 
 impl AssetSourceable for Mesh {
     fn from_string(raw: String) -> EResult<Self> {
-        Ok(raw.parse::<SimpleObject>().unwrap().to_mesh())
+        Ok(raw.parse::<MeshMaterial>().unwrap().to_mesh())
     }
 
     fn to_string(&self, prev_raw: String) -> EResult<String> {
@@ -671,51 +671,88 @@ struct AssetEntry {
 #[derive(Default, Deref, DerefMut, Resource)]
 struct AssetManagement(Vec<AssetEntry>);
 
+#[derive(Component)]
+struct FixedWireframe;
+
 #[derive(PartialEq)]
 enum SimpleObject {
-    Cube,
-    Plane,
-    Sphere,
-}
-
-impl FromStr for SimpleObject {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Cube" => Ok(SimpleObject::Cube),
-            "Plane" => Ok(SimpleObject::Plane),
-            "Sphere" => Ok(SimpleObject::Sphere),
-            _ => Err(()),
-        }
-    }
+    MeshMaterial(MeshMaterial),
+    Light(Light),
 }
 
 impl ToString for SimpleObject {
     fn to_string(&self) -> String {
         match self {
-            SimpleObject::Cube => "Cube",
-            SimpleObject::Plane => "Plane",
-            SimpleObject::Sphere => "Sphere",
+            SimpleObject::MeshMaterial(object) => object.to_string(),
+            SimpleObject::Light(light) => light.to_string(),
         }
-        .to_string()
     }
 }
 
-impl SimpleObject {
+#[derive(PartialEq)]
+enum MeshMaterial {
+    Cube,
+    Plane,
+    Sphere,
+}
+
+impl ToString for MeshMaterial {
+    fn to_string(&self) -> String {
+        match self {
+            MeshMaterial::Cube => "Cube".to_string(),
+            MeshMaterial::Plane => "Plane".to_string(),
+            MeshMaterial::Sphere => "Sphere".to_string(),
+        }
+    }
+}
+
+impl FromStr for MeshMaterial {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Cube" => Ok(MeshMaterial::Cube),
+            "Plane" => Ok(MeshMaterial::Plane),
+            "Sphere" => Ok(MeshMaterial::Sphere),
+            _ => Err(()),
+        }
+    }
+}
+
+impl MeshMaterial {
     fn to_mesh(&self) -> Mesh {
         match self {
-            SimpleObject::Cube => Mesh::from(shape::Cube { size: 1.0 }),
-            SimpleObject::Plane => Mesh::from(shape::Plane {
+            MeshMaterial::Cube => Mesh::from(shape::Cube { size: 1.0 }),
+            MeshMaterial::Plane => Mesh::from(shape::Plane {
                 size: 1.0,
                 subdivisions: 0,
             }),
-            SimpleObject::Sphere => Mesh::from(shape::UVSphere {
+            MeshMaterial::Sphere => Mesh::from(shape::UVSphere {
                 radius: 1.0,
                 sectors: 10,
                 stacks: 10,
             }),
         }
+    }
+}
+
+#[derive(PartialEq)]
+enum Light {
+    Spot,
+    Point,
+    Directional,
+    Ambient,
+}
+
+impl ToString for Light {
+    fn to_string(&self) -> String {
+        match self {
+            Light::Spot => "Spot",
+            Light::Point => "Point",
+            Light::Directional => "Directional",
+            Light::Ambient => "Ambient",
+        }
+        .to_string()
     }
 }
 
@@ -730,11 +767,11 @@ enum UiReference {
 
 #[derive(Resource, Default)]
 struct UiRegistry {
-    registry: HashMap<UiReference, &'static mut egui::Ui>,
+    registry: HashMap<UiReference, &'static mut Ui>,
 }
 
 impl UiRegistry {
-    fn ui_num<T: egui::emath::Numeric>(value: &mut T, ui: &mut egui::Ui) {
+    fn ui_num<T: egui::emath::Numeric>(value: &mut T, ui: &mut Ui) {
         ui.add(egui::DragValue::new(value).fixed_decimals(2).speed(0.1));
     }
 }
@@ -883,16 +920,38 @@ fn ui_inspect(
                     ui.close_menu();
                 }
             });
-            ui.menu_button("Objects", |ui| {
-                if ui.button("Cube").clicked() {
-                    world.send_event(AddSimpleObject(SimpleObject::Cube));
-                }
-                if ui.button("Plane").clicked() {
-                    world.send_event(AddSimpleObject(SimpleObject::Plane));
-                }
-                if ui.button("Sphere").clicked() {
-                    world.send_event(AddSimpleObject(SimpleObject::Sphere));
-                }
+            ui.menu_button("Insert", |ui| {
+                ui.menu_button("Object", |ui| {
+                    if ui.button("Cube").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::MeshMaterial(
+                            MeshMaterial::Cube,
+                        )));
+                    }
+                    if ui.button("Plane").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::MeshMaterial(
+                            MeshMaterial::Plane,
+                        )));
+                    }
+                    if ui.button("Sphere").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::MeshMaterial(
+                            MeshMaterial::Sphere,
+                        )));
+                    }
+                });
+                ui.menu_button("Light", |ui| {
+                    if ui.button("Spot").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::Light(Light::Spot)));
+                    }
+                    if ui.button("Point").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::Light(Light::Point)));
+                    }
+                    if ui.button("Directional").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::Light(Light::Directional)));
+                    }
+                    if ui.button("Ambient").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::Light(Light::Ambient)));
+                    }
+                });
             });
         });
     });
@@ -1449,17 +1508,23 @@ fn save_project(
 fn select_entity(
     mut commands: Commands,
     mut ev_select_entity: EventReader<SelectEntity>,
-    mut existing_selected: Query<Entity, With<SelectedEntity>>,
+    mut existing_selected: Query<(Entity, Option<&FixedWireframe>), With<SelectedEntity>>,
 ) {
     // Only take one instance of SelectEntity event - multiple events should not happen
     if let Some(event) = ev_select_entity.iter().next() {
         // Remove old selected
-        if let Ok(entity) = existing_selected.get_single_mut() {
+        if let Ok((entity, fixed_wireframe)) = existing_selected.get_single_mut() {
             commands
                 .entity(entity)
-                .remove::<(SelectedEntity, Wireframe)>();
+                .remove::<(SelectedEntity, PickableBundle)>();
+
+            if fixed_wireframe.is_none() {
+                commands.entity(entity).remove::<Wireframe>();
+            }
         }
-        commands.entity(event.0).insert((SelectedEntity, Wireframe));
+        commands
+            .entity(event.0)
+            .insert((SelectedEntity, Wireframe, PickableBundle::default()));
     }
 
     if ev_select_entity.iter().next().is_some() {
@@ -1560,37 +1625,75 @@ fn add_simple_object(
     mut asset_source_list: ResMut<AssetSourceList>,
 ) {
     for event in ev_add_simple_object.iter() {
-        let mesh_handle = meshes.add(event.0.to_mesh());
-        if let Id(_, id) = mesh_handle.id() {
-            asset_source_list.0.push(AssetSource {
-                source_type: AssetSourceType::AsString(event.0.to_string()),
-                type_uuid: Mesh::TYPE_UUID.to_string(),
-                uid: id,
-            });
-        } else {
-            error!("AssetPathId handle is not supported yet");
-        }
+        match &event.0 {
+            SimpleObject::MeshMaterial(mesh_material) => {
+                let mesh_handle = meshes.add(mesh_material.to_mesh());
+                if let Id(_, id) = mesh_handle.id() {
+                    asset_source_list.0.push(AssetSource {
+                        source_type: AssetSourceType::AsString(mesh_material.to_string()),
+                        type_uuid: Mesh::TYPE_UUID.to_string(),
+                        uid: id,
+                    });
+                } else {
+                    error!("AssetPathId handle is not supported yet");
+                }
 
-        let color = Color::rgb(0.7, 0.7, 0.7);
-        let material_handle = materials.add(color.into());
-        if let Id(_, id) = material_handle.id() {
-            asset_source_list.0.push(AssetSource {
-                source_type: AssetSourceType::AsString(ron::to_string(&color).unwrap()),
-                type_uuid: StandardMaterial::TYPE_UUID.to_string(),
-                uid: id,
-            });
-        } else {
-            error!("AssetPathId handle is not supported yet");
+                let color = Color::rgb(0.7, 0.7, 0.7);
+                let material_handle = materials.add(color.into());
+                if let Id(_, id) = material_handle.id() {
+                    asset_source_list.0.push(AssetSource {
+                        source_type: AssetSourceType::AsString(ron::to_string(&color).unwrap()),
+                        type_uuid: StandardMaterial::TYPE_UUID.to_string(),
+                        uid: id,
+                    });
+                } else {
+                    error!("AssetPathId handle is not supported yet");
+                }
+                commands
+                    .spawn(PbrBundle {
+                        mesh: mesh_handle,
+                        material: material_handle,
+                        transform: Transform::from_xyz(0.0, 0.0, 0.0),
+                        ..default()
+                    })
+                    .insert(Name::new(event.0.to_string()));
+            }
+            SimpleObject::Light(light) => {
+                let wireframe_mesh = Mesh::from(shape::Cube { size: 1.0 });
+                let wireframe_mesh_handle = meshes.add(wireframe_mesh);
+                let name = Name::new(light.to_string());
+                match &light {
+                    Light::Spot => {
+                        commands.spawn((
+                            SpotLightBundle::default(),
+                            name,
+                            wireframe_mesh_handle,
+                            Wireframe,
+                            FixedWireframe,
+                        ));
+                    }
+                    Light::Point => {
+                        commands.spawn((
+                            PointLightBundle::default(),
+                            name,
+                            wireframe_mesh_handle,
+                            Wireframe,
+                            FixedWireframe,
+                        ));
+                    }
+                    Light::Directional => {
+                        commands.spawn((
+                            DirectionalLightBundle::default(),
+                            name,
+                            wireframe_mesh_handle,
+                            Wireframe,
+                            FixedWireframe,
+                        ));
+                    }
+                    Light::Ambient => error!("WIP Ambient light"),
+                }
+            }
         }
-
-        commands
-            .spawn(PbrBundle {
-                mesh: mesh_handle,
-                material: material_handle,
-                transform: Transform::from_xyz(0.0, 0.0, 0.0),
-                ..default()
-            })
-            .insert(Name::new(event.0.to_string()));
     }
 }
 
