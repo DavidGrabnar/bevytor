@@ -176,31 +176,15 @@ impl InspectRegistry {
             match value.reflect_mut() {
                 ReflectMut::Struct(val) => self.exec_reflect_struct(val, ui, context),
                 ReflectMut::TupleStruct(val) => self.exec_reflect_tuple_struct(val, ui, context),
-                ReflectMut::Tuple(_) => {
-                    // TODO
-                    ui.label(format!("WIP TUPLE {}", value.type_name()));
-                    Ok(())
-                }
-                ReflectMut::List(_) => {
-                    // TODO
-                    ui.label(format!("WIP LIST {}", value.type_name()));
-                    Ok(())
-                }
-                ReflectMut::Array(_) => {
-                    // TODO
-                    ui.label(format!("WIP ARRAY {}", value.type_name()));
-                    Ok(())
-                }
+                ReflectMut::Tuple(val) => self.exec_reflect_tuple(val, ui, context),
+                ReflectMut::List(val) => self.exec_reflect_list(val, ui, context),
+                ReflectMut::Array(val) => self.exec_reflect_array(val, ui, context),
                 ReflectMut::Map(_) => {
                     // TODO
                     ui.label(format!("WIP MAP {}", value.type_name()));
                     Ok(())
                 }
-                ReflectMut::Value(val) => {
-                    // TODO
-                    ui.label(format!("WIP VALUE {}", value.type_name()));
-                    Ok(())
-                }
+                ReflectMut::Value(val) => self.exec_reflect(val, ui, context),
                 ReflectMut::Enum(_) => {
                     // TODO
                     ui.label(format!("WIP ENUM {}", value.type_name()));
@@ -214,7 +198,7 @@ impl InspectRegistry {
     pub fn exec_reflect_struct(
         &self,
         value: &mut dyn Struct,
-        ui: &mut egui::Ui,
+        ui: &mut Ui,
         params: &mut Context,
     ) -> EResult<()> {
         ui.vertical(|ui| {
@@ -241,7 +225,7 @@ impl InspectRegistry {
     pub fn exec_reflect_tuple_struct(
         &self,
         value: &mut dyn TupleStruct,
-        ui: &mut egui::Ui,
+        ui: &mut Ui,
         params: &mut Context,
     ) -> EResult<()> {
         let grid = Grid::new((*value).type_id());
@@ -259,10 +243,76 @@ impl InspectRegistry {
 
         Ok(())
     }
+
+    pub fn exec_reflect_tuple(
+        &self,
+        value: &mut dyn Tuple,
+        ui: &mut Ui,
+        params: &mut Context,
+    ) -> EResult<()> {
+        let grid = Grid::new((*value).type_id());
+        grid.show(ui, |ui| {
+            for i in 0..value.field_len() {
+                ui.label(i.to_string());
+                if let Some(field) = value.field_mut(i) {
+                    self.exec_reflect(field, ui, params);
+                } else {
+                    ui.label("<missing>");
+                }
+                ui.end_row();
+            }
+        });
+
+        Ok(())
+    }
+
+    pub fn exec_reflect_list(
+        &self,
+        value: &mut dyn List,
+        ui: &mut Ui,
+        params: &mut Context,
+    ) -> EResult<()> {
+        let grid = Grid::new((*value).type_id());
+        grid.show(ui, |ui| {
+            for i in 0..value.len() {
+                ui.label(i.to_string());
+                if let Some(field) = value.get_mut(i) {
+                    self.exec_reflect(field, ui, params);
+                } else {
+                    ui.label("<missing>");
+                }
+                ui.end_row();
+            }
+        });
+
+        Ok(())
+    }
+
+    pub fn exec_reflect_array(
+        &self,
+        value: &mut dyn Array,
+        ui: &mut Ui,
+        params: &mut Context,
+    ) -> EResult<()> {
+        let grid = Grid::new((*value).type_id());
+        grid.show(ui, |ui| {
+            for i in 0..value.len() {
+                ui.label(i.to_string());
+                if let Some(field) = value.get_mut(i) {
+                    self.exec_reflect(field, ui, params);
+                } else {
+                    ui.label("<missing>");
+                }
+                ui.end_row();
+            }
+        });
+
+        Ok(())
+    }
 }
 
 trait Inspectable {
-    fn ui(&mut self, ui: &mut egui::Ui, context: &mut Context);
+    fn ui(&mut self, ui: &mut Ui, context: &mut Context);
 }
 
 impl Inspectable for Transform {
@@ -295,7 +345,27 @@ impl Inspectable for Vec3 {
 impl Inspectable for Quat {
     fn ui(&mut self, ui: &mut Ui, context: &mut Context) {
         ui.horizontal(|ui| {
-            ui.label("TODO");
+            let (x, y, z) = self.to_euler(EulerRot::XYZ);
+            let mut new_x = x.to_degrees();
+            let mut new_y = y.to_degrees();
+            let mut new_z = z.to_degrees();
+            UiRegistry::ui_num(&mut new_x, ui);
+            UiRegistry::ui_num(&mut new_y, ui);
+            UiRegistry::ui_num(&mut new_z, ui);
+
+            let (mut old_x, mut old_y, mut old_z) = self.to_euler(EulerRot::XYZ);
+            if new_x != old_x || new_y != old_y || new_z != old_z {
+                let new = Quat::from_euler(
+                    EulerRot::XYZ,
+                    new_x.to_radians(),
+                    new_y.to_radians(),
+                    new_z.to_radians(),
+                );
+                self.x = new.x;
+                self.y = new.y;
+                self.z = new.z;
+                self.w = new.w;
+            }
         });
     }
 }
