@@ -4,7 +4,7 @@ General TODOs:
 */
 
 use crate::error::EResult;
-use crate::logs::LogBuffer;
+use crate::logs::{logs_ui, Level, LogBuffer, LogPlugin, PushLog};
 use crate::scripts::{handle_tasks, ScriptableRegistry};
 use crate::service::existing_projects::ExistingProjects;
 use crate::service::project::{Project, ProjectDescription};
@@ -23,11 +23,18 @@ use bevy_egui::egui::{Checkbox, Grid, Ui};
 use bevy_egui::{egui, EguiContext, EguiPlugin};
 //use bevy_mod_picking::{PickableBundle, PickingCamera, PickingCameraBundle};
 //use bevy_transform_gizmo::{GizmoPickSource, GizmoSettings};
+use crate::core::popup::{show_popup, BoxedPopup};
+use crate::third_party::clone_entity::CloneEntity;
+use bevy::render::camera;
 use bevytor_core::tree::{Action, HoverEntity, Tree};
 use bevytor_core::{get_label, show_ui_hierarchy, update_state_hierarchy, SelectedEntity};
 use bevytor_script::ComponentRegistry;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use smooth_bevy_cameras::controllers::orbit::{
+    OrbitCameraBundle, OrbitCameraController, OrbitCameraPlugin,
+};
+use smooth_bevy_cameras::LookTransformPlugin;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -66,6 +73,8 @@ pub struct EditorState {
     existing_project_path: String,
 
     system_info: sysinfo::System,
+
+    current_popup: Option<BoxedPopup>,
 }
 
 impl Default for EditorState {
@@ -84,6 +93,7 @@ impl Default for EditorState {
             playing: false,
             initial: true,
             dynamic_scene_handle: None,
+            current_popup: None,
         }
     }
 }
@@ -111,7 +121,17 @@ impl Default for InspectRegistry {
         new.skipped.insert(TypeId::of::<SelectedEntity>());
 
         new.register::<f32>();
+        new.register::<f64>();
+        new.register::<usize>();
+        new.register::<u8>();
+        new.register::<u16>();
+        new.register::<u32>();
         new.register::<u64>();
+        new.register::<isize>();
+        new.register::<i8>();
+        new.register::<i16>();
+        new.register::<i32>();
+        new.register::<i64>();
         new.register::<bool>();
         new.register::<Vec3>();
         new.register::<Quat>();
@@ -141,7 +161,7 @@ impl InspectRegistry {
         &self,
         value: &mut dyn Reflect,
         ui: &mut Ui,
-        mut context: &mut Context,
+        context: &mut Context,
     ) -> EResult<()> {
         // If type is registered, use UI impl, else use reflect to break it down
         let type_id = (*value).type_id();
@@ -153,7 +173,7 @@ impl InspectRegistry {
             ui.separator();
             ui.collapsing(context.collapsible.as_ref().unwrap().clone(), |ui| {
                 context.collapsible = None;
-                self.exec_reflect(value, ui, &mut context)
+                self.exec_reflect(value, ui, context)
             })
             .body_returned
             .unwrap_or(Ok(()))
@@ -161,6 +181,10 @@ impl InspectRegistry {
             callback(value.as_any_mut(), ui, context);
             Ok(())
         } else {
+            if context.from_val {
+                ui.label(format!("WIP VALUE {}", value.type_name()));
+                return Ok(());
+            }
             match value.reflect_mut() {
                 ReflectMut::Struct(val) => self.exec_reflect_struct(val, ui, context),
                 ReflectMut::TupleStruct(val) => self.exec_reflect_tuple_struct(val, ui, context),
@@ -172,14 +196,16 @@ impl InspectRegistry {
                     ui.label(format!("WIP MAP {}", value.type_name()));
                     Ok(())
                 }
-                ReflectMut::Value(val) => self.exec_reflect(val, ui, context),
+                ReflectMut::Value(val) => {
+                    context.from_val = true;
+                    self.exec_reflect(val, ui, context)
+                }
                 ReflectMut::Enum(_) => {
                     // TODO
                     ui.label(format!("WIP ENUM {}", value.type_name()));
                     Ok(())
                 }
             }
-            // println!("NOTFOUND {:?}", type_id);
         }
     }
 
@@ -358,17 +384,19 @@ impl Inspectable for Quat {
     }
 }
 
-impl Inspectable for u64 {
-    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
-        UiRegistry::ui_num(self, ui);
+macro_rules! impl_inspectable_numeric {
+    ($($uint_type: ty),*) => {
+        $(
+            impl Inspectable for $uint_type {
+                fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
+                    UiRegistry::ui_num(self, ui);
+                }
+            }
+        )*
     }
 }
 
-impl Inspectable for f32 {
-    fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
-        UiRegistry::ui_num(self, ui);
-    }
-}
+impl_inspectable_numeric!(usize, u8, u16, u32, u64, isize, i8, i16, i32, i64, f32, f64);
 
 impl Inspectable for bool {
     fn ui(&mut self, ui: &mut Ui, _: &mut Context) {
@@ -418,6 +446,7 @@ struct Context<'a> {
     world: *mut World,
     registry: &'a InspectRegistry,
     collapsible: Option<String>,
+    from_val: bool,
 }
 
 #[derive(Default)]
@@ -466,6 +495,22 @@ impl Command for LoadScene {
                     editor_state.dynamic_scene_handle = Some(self.0.clone());
                 });
 
+                let mut state =
+                    world.query_filtered::<Entity, (With<camera::Camera>, With<EditorCamera>)>();
+                if let Ok(entity) = state.get_single(world) {
+                    if let Some(mut entity_mut) = world.get_entity_mut(entity) {
+                        entity_mut.insert(OrbitCameraBundle::new(
+                            OrbitCameraController::default(),
+                            Vec3::new(-2.0, 5.0, 5.0),
+                            Vec3::new(0., 0., 0.),
+                            Vec3::Y,
+                        ));
+                    } else {
+                        println!("No entity for camera");
+                    }
+                } else {
+                    println!("No editor camera. Must be added manually!");
+                }
                 /*let mut state1 =
                     world.query_filtered::<(&GlobalTransform, &Camera), With<PickingCamera>>();
                 for result in state1.iter(world) {
@@ -677,13 +722,17 @@ struct AssetEntry {
 #[derive(Default, Deref, DerefMut, Resource)]
 struct AssetManagement(Vec<AssetEntry>);
 
-#[derive(Component)]
+#[derive(Component, Default, Reflect, Serialize, Deserialize)]
 struct FixedWireframe;
+
+#[derive(Component, Default, Reflect, Serialize, Deserialize)]
+struct EditorCamera;
 
 #[derive(PartialEq)]
 enum SimpleObject {
     MeshMaterial(MeshMaterial),
     Light(Light),
+    Camera(Camera),
 }
 
 impl ToString for SimpleObject {
@@ -691,6 +740,7 @@ impl ToString for SimpleObject {
         match self {
             SimpleObject::MeshMaterial(object) => object.to_string(),
             SimpleObject::Light(light) => light.to_string(),
+            SimpleObject::Camera(camera) => camera.to_string(),
         }
     }
 }
@@ -762,6 +812,22 @@ impl ToString for Light {
     }
 }
 
+#[derive(PartialEq)]
+enum Camera {
+    Perspective,
+    Orthographic,
+}
+
+impl ToString for Camera {
+    fn to_string(&self) -> String {
+        match self {
+            Camera::Perspective => "Perspective",
+            Camera::Orthographic => "Orthographic",
+        }
+        .to_string()
+    }
+}
+
 struct AddSimpleObject(SimpleObject);
 
 #[derive(Eq, PartialEq, Hash)]
@@ -811,8 +877,11 @@ impl Plugin for EditorPlugin {
             .add_event::<ResetWorldEvent>()
             .add_plugin(EguiPlugin)
             .add_plugin(WireframePlugin)
+            .add_plugin(LogPlugin)
             //.add_plugins(bevy_mod_picking::DefaultPickingPlugins)
             //.add_plugin(bevy_transform_gizmo::TransformGizmoPlugin::default())
+            .add_plugin(LookTransformPlugin)
+            .add_plugin(OrbitCameraPlugin::default())
             .add_startup_system(get_editor_state)
             //.add_startup_system(disable_gizmo)
             // Ensure order of UI systems execution!
@@ -841,6 +910,7 @@ impl Plugin for EditorPlugin {
             .add_system(system_update_state_hierarchy)
             .add_system(add_components)
             .add_system(handle_tasks)
+            .add_system(show_popup_on_error)
             //.register_type::<CursorIcon>()
             //.register_type::<bevy::window::CursorGrabMode>()
             //.register_type::<bevy::window::CompositeAlphaMode>()
@@ -853,6 +923,14 @@ impl Plugin for EditorPlugin {
             .register_type_data::<OriginalEntityId, ReflectSerialize>()
             .register_type_data::<OriginalEntityId, ReflectDeserialize>()
             .register_type_data::<OriginalEntityId, ReflectComponent>()
+            .register_type::<EditorCamera>()
+            .register_type_data::<EditorCamera, ReflectSerialize>()
+            .register_type_data::<EditorCamera, ReflectDeserialize>()
+            .register_type_data::<EditorCamera, ReflectComponent>()
+            .register_type::<FixedWireframe>()
+            .register_type_data::<FixedWireframe, ReflectSerialize>()
+            .register_type_data::<FixedWireframe, ReflectDeserialize>()
+            .register_type_data::<FixedWireframe, ReflectComponent>()
             .register_type_data::<Rect, ReflectSerialize>()
             .register_type_data::<Rect, ReflectDeserialize>();
         //.insert_sub_app(TestSubApp, sub_app);
@@ -935,6 +1013,17 @@ fn ui_inspect(
                         world.send_event(AddSimpleObject(SimpleObject::Light(Light::Ambient)));
                     }
                 });
+                ui.menu_button("Camera", |ui| {
+                    if ui.button("Perspective").clicked() {
+                        world
+                            .send_event(AddSimpleObject(SimpleObject::Camera(Camera::Perspective)));
+                    }
+                    if ui.button("Orthographic").clicked() {
+                        world.send_event(AddSimpleObject(SimpleObject::Camera(
+                            Camera::Orthographic,
+                        )));
+                    }
+                });
             });
         });
     });
@@ -983,85 +1072,119 @@ fn ui_inspect(
     });
 
     egui::SidePanel::right("inspector").show(egui_context, |ui| {
-        if let Ok((entity, name)) = world
-            .query_filtered::<(Entity, Option<&Name>), With<SelectedEntity>>()
-            .get_single_mut(world)
-        {
-            let label = get_label(entity, name);
-            ui.horizontal(|ui| {
-                ui.label(label);
-                if ui.button("❌").clicked() {
-                    world.send_event(RemoveEntity(entity));
-                }
-            });
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            if let Ok((entity, name)) = world
+                .query_filtered::<(Entity, Option<&Name>), With<SelectedEntity>>()
+                .get_single_mut(world)
+            {
+                let label = get_label(entity, name);
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    if ui.button("❌").clicked() {
+                        world.send_event(RemoveEntity(entity));
+                    }
+                });
 
-            let mut component_type_ids = Vec::new();
-            for archetype in world.archetypes().iter() {
-                let mut found = false;
-                for archetype_entity in archetype.entities() {
-                    if archetype_entity.entity() == entity {
-                        found = true;
+                let mut component_type_ids = Vec::new();
+                for archetype in world.archetypes().iter() {
+                    let mut found = false;
+                    for archetype_entity in archetype.entities() {
+                        if archetype_entity.entity() == entity {
+                            found = true;
+                        }
+                    }
+                    if found {
+                        for component_id in archetype.components() {
+                            let comp_info = world.components().get_info(component_id).unwrap();
+                            component_type_ids
+                                .push((comp_info.type_id().unwrap(), comp_info.name().to_string()));
+                        }
+                        break;
                     }
                 }
-                if found {
-                    for component_id in archetype.components() {
-                        let comp_info = world.components().get_info(component_id).unwrap();
-                        component_type_ids
-                            .push((comp_info.type_id().unwrap(), comp_info.name().to_string()));
+
+                world.resource_scope(|world, inspect_registry: Mut<InspectRegistry>| {
+                    world.resource_scope(|world, type_registry_arc: Mut<AppTypeRegistry>| {
+                        // let mut entity_mut = world.entity_mut(entity);
+                        for (component_type_id, component_name) in component_type_ids {
+                            // TODO is this even possible ???
+                            // let component = entity_mut.get_mut_by_id(component_id).unwrap();
+                            // inspect_registry.exec(&mut component.into_inner().as_ptr() as &mut dyn Any, ui);
+
+                            // if let Some(callback) = inspect_registry.impls.get(&component_id.type_id()) {
+
+                            let type_registry = type_registry_arc.read();
+                            if let Some(registration) = type_registry.get(component_type_id) {
+                                let reflect_component =
+                                    registration.data::<ReflectComponent>().unwrap();
+
+                                let context = &mut Context {
+                                    world,
+                                    registry: &inspect_registry,
+                                    collapsible: Some(
+                                        component_name.rsplit_once(':').unwrap().1.to_string(),
+                                    ),
+                                    from_val: false,
+                                };
+                                let mut entity_mut = world.get_entity_mut(entity).unwrap();
+                                let reflect =
+                                    reflect_component.reflect_mut(&mut entity_mut).unwrap();
+                                inspect_registry
+                                    .exec_reflect(reflect.into_inner(), ui, context)
+                                    .unwrap();
+                            } else {
+                                // println!("NOT IN TYPE REGISTRY {:?}: {}", component_type_id, component_name);
+                            }
+
+                            // callback(reflect.as_any_mut(), ui);
+                            // }
+                        }
+                    });
+                });
+                ui.separator();
+                ui.menu_button("Add component ➕", |ui| {
+                    // TODO add fixed elements (if not already on entity) (transform, light, etc.) besides script components
+                    world.resource_scope(|world, registry: Mut<ComponentRegistry>| {
+                        for (id, (name, _)) in registry.reg.iter() {
+                            if ui.button(name).clicked() {
+                                world.send_event(AddComponent(entity, id.clone()));
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+                ui.label("Cameras");
+                let mut active_camera_entity = None;
+                let mut camera_changed = false;
+                let mut camera_state = world
+                    .query_filtered::<(Entity, &mut camera::Camera, Option<&EditorCamera>), ()>();
+                for (entity, mut camera, editor_camera) in camera_state.iter_mut(world) {
+                    if camera.is_active {
+                        active_camera_entity = Some(entity);
                     }
-                    break;
+                    ui.horizontal(|ui| {
+                        let name = match editor_camera {
+                            None => format!("Camera {}", entity.index()),
+                            Some(_) => "Editor camera".to_string(),
+                        };
+                        ui.label(name);
+                        if !camera.is_active && ui.button("Select").clicked() {
+                            camera.is_active = true;
+                            camera_changed = true;
+                        }
+                    });
+                }
+                if camera_changed {
+                    for (entity, mut camera, _) in camera_state.iter_mut(world) {
+                        if let Some(active_entity) = active_camera_entity {
+                            if active_entity == entity {
+                                camera.is_active = false;
+                            }
+                        }
+                    }
                 }
             }
-
-            world.resource_scope(|world, inspect_registry: Mut<InspectRegistry>| {
-                world.resource_scope(|world, type_registry_arc: Mut<AppTypeRegistry>| {
-                    // let mut entity_mut = world.entity_mut(entity);
-                    for (component_type_id, component_name) in component_type_ids {
-                        // TODO is this even possible ???
-                        // let component = entity_mut.get_mut_by_id(component_id).unwrap();
-                        // inspect_registry.exec(&mut component.into_inner().as_ptr() as &mut dyn Any, ui);
-
-                        // if let Some(callback) = inspect_registry.impls.get(&component_id.type_id()) {
-
-                        let type_registry = type_registry_arc.read();
-                        if let Some(registration) = type_registry.get(component_type_id) {
-                            let reflect_component =
-                                registration.data::<ReflectComponent>().unwrap();
-
-                            let context = &mut Context {
-                                world,
-                                registry: &inspect_registry,
-                                collapsible: Some(
-                                    component_name.rsplit_once(':').unwrap().1.to_string(),
-                                ),
-                            };
-                            let mut entity_mut = world.get_entity_mut(entity).unwrap();
-                            let reflect = reflect_component.reflect_mut(&mut entity_mut).unwrap();
-                            inspect_registry
-                                .exec_reflect(reflect.into_inner(), ui, context)
-                                .unwrap();
-                        } else {
-                            // println!("NOT IN TYPE REGISTRY {:?}: {}", component_type_id, component_name);
-                        }
-
-                        // callback(reflect.as_any_mut(), ui);
-                        // }
-                    }
-                });
-            });
-            ui.separator();
-            ui.menu_button("Add component ➕", |ui| {
-                // TODO add fixed elements (if not already on entity) (transform, light, etc.) besides script components
-                world.resource_scope(|world, registry: Mut<ComponentRegistry>| {
-                    for (id, (name, _)) in registry.reg.iter() {
-                        if ui.button(name).clicked() {
-                            world.send_event(AddComponent(entity, id.clone()));
-                        }
-                    }
-                });
-            });
-        }
-        ui.separator();
+        });
     });
 
     egui::TopBottomPanel::top("controls").show(egui_context, |ui| {
@@ -1082,13 +1205,15 @@ fn ui_inspect(
 
     egui::TopBottomPanel::bottom("logs").show(egui_context, |ui| {
         let log_buffer = world.resource::<LogBuffer>();
-        for entry in log_buffer.iter() {
-            ui.label(entry);
-        }
+        logs_ui(ui, log_buffer);
     });
 
     world.resource_scope(|world, mut editor_state: Mut<EditorState>| {
-        if editor_state.current_project.is_none() {
+        if let Some(popup) = &editor_state.current_popup {
+            if show_popup(egui_context, popup) {
+                editor_state.current_popup = None;
+            }
+        } else if editor_state.current_project.is_none() {
             egui::Window::new("Select project")
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -1438,26 +1563,30 @@ fn save_project(
                 project_scene_path, project_asset_path, project_file_path
             );
 
-            //let type_registry = type_registry.read();
             let scene = DynamicScene::from_world(world, &type_registry);
-            let scene_serialized = scene.serialize_ron(&type_registry).unwrap();
+            let mut scene_serialized = scene.serialize_ron(&type_registry).unwrap();
 
             // TODO weird hack for transforming Rect type for area in OrthographicProjection
-            let scene_serialized = {
+            loop {
                 let re = Regex::new(r"area: \(\n +min: \(\n +x: ([+-]?\d+\.?\d*),\n +y: ([+-]?\d+\.?\d*),\n +\),\n +max: \(\n +x: ([+-]?\d+\.?\d*),\n +y: ([+-]?\d+\.?\d*),\n +\),\n +\),").unwrap();
-                let caps = re.captures(&scene_serialized).unwrap();
-                let replacement = r"area: (
+                if let Some(caps) = re.captures(&scene_serialized) {
+                    println!("reformat rect");
+                    let replacement = r"area: (
             min: (X1, Y1),
             max: (X2, Y2),
           ),";
-                let new_val = replacement
-                    .replace("X1", caps.get(1).unwrap().into())
-                    .replace("Y1", caps.get(2).unwrap().into())
-                    .replace("X2", caps.get(3).unwrap().into())
-                    .replace("Y2", caps.get(4).unwrap().into());
+                    let new_val = replacement
+                        .replace("X1", caps.get(1).unwrap().into())
+                        .replace("Y1", caps.get(2).unwrap().into())
+                        .replace("X2", caps.get(3).unwrap().into())
+                        .replace("Y2", caps.get(4).unwrap().into());
 
-                re.replace(&scene_serialized, new_val).to_string()
-            };
+                    scene_serialized = re.replace(&scene_serialized, new_val).to_string();
+                } else {
+                    break;
+                }
+            }
+
             // TODO: weird hack to remove window entities
             let scene_serialized = {
                 let re = Regex::new(
@@ -1647,6 +1776,15 @@ fn add_simple_object(
             SimpleObject::Light(light) => {
                 let wireframe_mesh = Mesh::from(shape::Cube { size: 1.0 });
                 let wireframe_mesh_handle = meshes.add(wireframe_mesh);
+                if let HandleId::Id(_, id) = wireframe_mesh_handle.id() {
+                    asset_source_list.0.push(AssetSource {
+                        source_type: AssetSourceType::AsString("Cube".to_string()),
+                        type_uuid: Mesh::TYPE_UUID.to_string(),
+                        uid: id,
+                    });
+                } else {
+                    error!("AssetPathId handle is not supported yet");
+                }
                 let name = Name::new(light.to_string());
                 match &light {
                     // WIP - spotlight has no effect - broken ???
@@ -1691,6 +1829,49 @@ fn add_simple_object(
                     }
                     Light::Ambient => error!("WIP Ambient light"),
                 }
+            }
+            SimpleObject::Camera(camera) => {
+                let wireframe_mesh = Mesh::from(shape::Cube { size: 1.0 });
+                let wireframe_mesh_handle = meshes.add(wireframe_mesh);
+                if let HandleId::Id(_, id) = wireframe_mesh_handle.id() {
+                    asset_source_list.0.push(AssetSource {
+                        source_type: AssetSourceType::AsString("Cube".to_string()),
+                        type_uuid: Mesh::TYPE_UUID.to_string(),
+                        uid: id,
+                    });
+                } else {
+                    error!("AssetPathId handle is not supported yet");
+                }
+                let name = Name::new(camera.to_string());
+                let projection = match camera {
+                    Camera::Perspective => {
+                        Projection::Perspective(PerspectiveProjection::default())
+                    }
+                    Camera::Orthographic => Projection::Orthographic(OrthographicProjection {
+                        scale: 0.01,
+                        ..default()
+                    }),
+                };
+                let entity = commands
+                    .spawn((
+                        Camera3dBundle {
+                            projection,
+                            camera: camera::Camera {
+                                is_active: false,
+                                ..default()
+                            },
+                            ..default()
+                        },
+                        Visibility::default(),
+                        ComputedVisibility::default(),
+                        name,
+                        wireframe_mesh_handle,
+                        Wireframe,
+                        FixedWireframe,
+                    ))
+                    .id();
+
+                ev_select_entity.send(SelectEntity(entity));
             }
         }
     }
@@ -1770,5 +1951,16 @@ fn reset_world(mut ev_reset_world: EventReader<ResetWorldEvent>, mut commands: C
 
     if ev_reset_world.iter().next().is_some() {
         warn!("Multiple ResetWorldEvent events found in listener! Should not happen");
+    }
+}
+
+fn show_popup_on_error(mut reader: EventReader<PushLog>, mut editor_state: ResMut<EditorState>) {
+    for event in reader.iter() {
+        if event.1 == Level::Error || event.1 == Level::Fatal {
+            editor_state.current_popup = Some(Box::new(crate::error::Error {
+                code: event.0.to_string(),
+                details: None,
+            }))
+        }
     }
 }

@@ -1,6 +1,6 @@
-use crate::logs::LogBuffer;
+use crate::logs::{Level, LogBuffer, PushLog};
 use crate::plugin::{LoadProjectProgress, LoadProjectStep};
-use bevy::prelude::{info, Mut, Resource, World};
+use bevy::prelude::{Mut, Resource, World};
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy::utils::HashMap;
 use bevytor_script::{CreateScript, Script};
@@ -63,8 +63,7 @@ impl ScriptableRegistry {
         if let Some(_) = old_entry {
             // TODO halt task?
         }
-        let mut logger = world.resource_mut::<LogBuffer>();
-        logger.write("Script loading started".to_string());
+        world.send_event(PushLog("Script loading started".to_string(), Level::Info));
     }
 
     fn clone_lib_file(base_path: &Path) -> PathBuf {
@@ -148,7 +147,7 @@ pub fn handle_tasks(world: &mut World) {
                 registry.old_impls.push(old_impl.state);
             }
             let mut logger = world.resource_mut::<LogBuffer>();
-            logger.write("Script loading complete".to_string());
+            logger.write_info("Script loading complete".to_string());
 
             let mut load_project_progress = world.resource_mut::<LoadProjectProgress>();
             if let LoadProjectStep::Scripts(false) = load_project_progress.0 {

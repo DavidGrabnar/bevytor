@@ -2,6 +2,7 @@ mod plugin;
 mod service;
 #[macro_use]
 mod error;
+mod core;
 mod logs;
 mod scripts;
 mod ui;

@@ -27,6 +27,8 @@ regex = "1.7.3"
 futures-lite = "1.13.0"
 bevy_mod_picking = "0.12.0"
 bevy_transform_gizmo = "0.6.0"
+smooth-bevy-cameras = "0.8.0"
+paste = "1.0.13"
 
 #[features]
 #default = []
