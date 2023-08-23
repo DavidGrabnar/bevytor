@@ -15,3 +15,4 @@ cargo/bevytor_script/target
 cargo/bevytor_derive/target
 cargo/bevytor_core/target
 cargo/bevytor_editor/resources/project_template/scripts/target
+evaluation/jumpy-bird/barebone/target
