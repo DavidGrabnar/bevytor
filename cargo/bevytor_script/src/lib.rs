@@ -1,15 +1,21 @@
-use bevy::ecs::component::TableStorage;
-use bevy::ecs::query::{QueryState, ReadOnlyWorldQuery, WorldQuery};
 use bevy::ecs::system::EntityCommands;
 use bevy::prelude::*;
+use bevy::reflect::{GetTypeRegistration, TypeRegistration};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
+pub type Definition = (
+    TypeRegistration,
+    ReflectComponent,
+    ReflectSerialize,
+    ReflectDeserialize,
+);
+
 pub trait Script: Any + Send + Sync {
     fn name(&self) -> &'static str;
-    fn run(&self, world: &mut World) -> Option<TypeId>;
-    // return is a temporary test for dynamically loaded components, will be moved to a separate function
-    fn init(&self, world: &mut World);
+    fn start(&self, world: &mut World);
+    fn run(&self, world: &mut World, input: &Input<KeyCode>);
+    fn init(&self, world: &mut World) -> Vec<Definition>;
 }
 
 pub type CreateScript = unsafe fn() -> *mut dyn Script;
@@ -18,7 +24,7 @@ pub type CreateScript = unsafe fn() -> *mut dyn Script;
 macro_rules! declare_script {
     ($plugin_type:ty, $constructor:path) => {
         #[no_mangle]
-        pub extern "C" fn create_script() -> *mut dyn $crate::Script {
+        pub fn _create_script() -> *mut dyn $crate::Script {
             let constructor: fn() -> $plugin_type = $constructor;
 
             let object = constructor();
@@ -31,12 +37,13 @@ macro_rules! declare_script {
 #[derive(Resource, Default)]
 pub struct ComponentRegistry {
     pub reg: HashMap<TypeId, (String, Box<fn(&mut EntityCommands) -> ()>)>,
-    // pub defs2: HashMap<TypeId, Box<dyn Component<Storage = dyn Any>>>,
-    // pub defs: HashMap<TypeId, Box<dyn Reflect>>,
 }
 
 impl ComponentRegistry {
-    pub fn register<T: Component<Storage = TableStorage> + Default + Reflect>(&mut self) {
+    pub fn register<T>(&mut self)
+    where
+        T: Component + Default + Reflect,
+    {
         self.reg.insert(
             TypeId::of::<T>(),
             (
@@ -46,8 +53,6 @@ impl ComponentRegistry {
                 }),
             ),
         );
-        //self.defs.insert(TypeId::of::<T>(), Box::<T>::default());
-        // self.defs2.insert(TypeId::of::<T>(), Box::<T>::default());
     }
 
     //pub fn get<T: Component + Reflect + Clone>(&self, id: TypeId) -> T {
@@ -55,4 +60,32 @@ impl ComponentRegistry {
     //    let any = def.as_any();
     //    any.downcast_ref::<T>().unwrap().clone()
     //}
+}
+
+pub fn register_component<T>(world: &mut World) -> Definition
+where
+    T: Reflect + Default + Component + GetTypeRegistration,
+{
+    world.resource_mut::<ComponentRegistry>().register::<T>();
+
+    let registry = world.resource_mut::<AppTypeRegistry>();
+    registry.write().register::<T>();
+
+    let registry = registry.read();
+    let type_id = TypeId::of::<T>();
+    let registration = registry.get(type_id).unwrap().clone();
+    let component = registry
+        .get_type_data::<ReflectComponent>(type_id)
+        .unwrap()
+        .clone();
+    let serialize = registry
+        .get_type_data::<ReflectSerialize>(type_id)
+        .unwrap()
+        .clone();
+    let deserialize = registry
+        .get_type_data::<ReflectDeserialize>(type_id)
+        .unwrap()
+        .clone();
+
+    (registration, component, serialize, deserialize)
 }

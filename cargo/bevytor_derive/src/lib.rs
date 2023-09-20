@@ -15,11 +15,9 @@ fn derive_dynamic_script(input: TokenStream) -> TokenStream {
 
     TokenStream::from(quote! {
         #[no_mangle]
-        pub extern "C" fn _create_script() -> *mut dyn bevytor_script::Script {
-            println!("1 - CREATING THINGY script MIGHT BLOW UP");
+        pub fn _create_script() -> *mut dyn bevytor_script::Script {
             let object = #struct_name {};
             let boxed = Box::new(object);
-            println!("1 - Got BOXED");
             Box::into_raw(boxed)
         }
     })

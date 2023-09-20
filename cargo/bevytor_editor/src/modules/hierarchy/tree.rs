@@ -1,19 +1,19 @@
-use crate::tree::Action::NoAction;
-use bevy::prelude::*;
+use bevy::prelude::{Entity, Resource};
 use bevy_egui::egui;
 use bevy_egui::egui::collapsing_header::CollapsingState;
-use bevy_egui::egui::emath::RectTransform;
-use bevy_egui::egui::Shape::Rect;
-use bevy_egui::egui::{
-    emath, epaint, CollapsingHeader, Id, InnerResponse, LayerId, Order, Response, Sense, Shape, Ui,
-    Vec2,
-};
-use std::fmt::{Debug, Formatter, Write};
+use bevy_egui::egui::{Id, LayerId, Order, Sense, Ui};
+use std::fmt::{Debug, Formatter};
 
-pub enum Action {
+pub enum NodeAction {
+    Select(Entity),
+    Clone(Entity),
+    Remove(Entity),
+}
+
+pub enum TreeAction {
     NoAction,
-    Selected(Entity),
-    DragDrop(Entity, HoverEntity),
+    Node(NodeAction),
+    Move(Entity, HoverEntity),
 }
 
 #[derive(Debug, Clone)]
@@ -22,13 +22,22 @@ pub enum HoverEntity {
     Node(Entity),
 }
 
+impl HoverEntity {
+    pub fn entity(&self) -> Option<Entity> {
+        match self {
+            Self::Root => None,
+            HoverEntity::Node(entity) => Some(*entity),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Context {
     drag_entity: Option<Entity>,
     hover_entity: Option<HoverEntity>,
 }
 
-#[derive(Default)]
+#[derive(Resource, Default)]
 pub struct Tree(Node);
 
 impl Tree {
@@ -36,21 +45,21 @@ impl Tree {
         Self(root)
     }
 
-    pub fn ui(&self, ui: &mut Ui) -> Action {
+    pub fn ui(&self, ui: &mut Ui) -> TreeAction {
         let mut context = Context::default();
         let action = self.0.ui(ui, &mut context);
 
         if let Some(dragged) = context.drag_entity {
             if let Some(hovered) = context.hover_entity {
                 if ui.input(|ui| ui.pointer.any_released()) {
-                    if let NoAction = action {
+                    if let TreeAction::NoAction = &action {
                         if let HoverEntity::Node(entity) = hovered {
                             if entity != dragged {
                                 // only return if not equal
-                                return Action::DragDrop(dragged, hovered);
+                                return TreeAction::Move(dragged, hovered);
                             }
                         } else {
-                            return Action::DragDrop(dragged, hovered);
+                            return TreeAction::Move(dragged, hovered);
                         }
                     }
                 }
@@ -68,7 +77,7 @@ impl Debug for Tree {
 }
 
 #[derive(Clone, Default)]
-pub struct Node(Option<(Entity, String)>, pub(crate) Vec<Node>);
+pub struct Node(Option<(Entity, String)>, pub Vec<Node>);
 
 impl Debug for Node {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -76,7 +85,7 @@ impl Debug for Node {
         for child in self.1.as_slice() {
             f.write_str(format!("({:?})", child).as_str())?;
         }
-        std::fmt::Result::Ok(())
+        Ok(())
     }
 }
 
@@ -86,7 +95,7 @@ impl Node {
         Self(entity, children)
     }
 
-    fn ui(&self, ui: &mut Ui, context: &mut Context) -> Action {
+    fn ui(&self, ui: &mut Ui, context: &mut Context) -> TreeAction {
         let name = match self.0.as_ref() {
             Some(entity) => entity.1.as_str(),
             None => "Scene",
@@ -109,12 +118,7 @@ impl Node {
                             context.drag_entity = Some(entity.0);
                         }
                     }
-                    if let Some(response) = response {
-                        if response.clicked() {
-                            return Action::Selected(self.0.as_ref().unwrap().0);
-                        }
-                    }
-                    Action::NoAction
+                    response.map_or(TreeAction::NoAction, |a| TreeAction::Node(a))
                 })
             });
             let is_being_dragged = ui.memory(|ui| ui.is_anything_being_dragged());
@@ -138,17 +142,19 @@ impl Node {
                     )
                     .show_header(ui, |ui| self.ui_element(name, id_source, ui))
                     .body(|ui| {
-                        self.1.iter().fold(Action::NoAction, |curr_action, child| {
-                            let action = child.ui(ui, context);
-                            if let Action::Selected(_entity) = action {
-                                return action;
-                            }
-                            curr_action
-                        })
+                        self.1
+                            .iter()
+                            .fold(TreeAction::NoAction, |curr_action, child| {
+                                let action = child.ui(ui, context);
+                                if let TreeAction::Node(_) = action {
+                                    return action;
+                                }
+                                curr_action
+                            })
                     })
                 });
             if let Some(response) = body_response {
-                if let Action::Selected(_entity) = response.inner {
+                if let TreeAction::Node(_) = response.inner {
                     return response.inner;
                 }
             }
@@ -158,12 +164,8 @@ impl Node {
                     context.drag_entity = Some(entity.0);
                 }
             }
-            if let Some(response) = header_response.inner.1 {
-                if response.clicked() {
-                    if let Some(entity) = self.0.as_ref() {
-                        return Action::Selected(entity.0);
-                    }
-                }
+            if let Some(a) = header_response.inner.1 {
+                return TreeAction::Node(a);
             }
             let is_being_dragged = ui.memory(|ui| ui.is_anything_being_dragged());
             if is_being_dragged && can_accept_what_is_being_dragged && response.hovered() {
@@ -175,20 +177,31 @@ impl Node {
                 context.hover_entity = Some(hover_entity.clone());
             }
         }
-        Action::NoAction
+        TreeAction::NoAction
     }
 
-    fn ui_element(&self, name: &str, id_source: String, ui: &mut Ui) -> (bool, Option<Response>) {
+    fn ui_element(&self, name: &str, id_source: String, ui: &mut Ui) -> (bool, Option<NodeAction>) {
         let (dragged, _) = drag_source(ui, Id::new(id_source), |ui| {
             ui.label(name);
         });
-        (
-            dragged,
-            match self.0.as_ref() {
-                Some(_entity) => Some(ui.button("👁")),
-                None => None,
-            },
-        )
+        let response = ui
+            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(el) = &self.0 {
+                    if ui.button("❌").clicked() {
+                        Some(NodeAction::Remove(el.0))
+                    } else if ui.button("🗐").clicked() {
+                        Some(NodeAction::Clone(el.0))
+                    } else if ui.button("👁").clicked() {
+                        Some(NodeAction::Select(el.0))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .inner;
+        (dragged, response)
     }
 }
 
@@ -225,7 +238,5 @@ pub fn drop_target<R>(
     body: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let is_being_dragged = ui.memory(|ui| ui.is_anything_being_dragged());
-
-    let response = body(ui);
-    response
+    body(ui)
 }

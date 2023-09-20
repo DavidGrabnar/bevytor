@@ -1,11 +1,19 @@
+use crate::core::events::StartPlaying;
 use crate::logs::{Level, LogBuffer, PushLog};
 use crate::plugin::{LoadProjectProgress, LoadProjectStep};
-use bevy::prelude::{Mut, Resource, World};
+use bevy::ecs::system::SystemState;
+use bevy::prelude::{
+    AppTypeRegistry, EventReader, Input, KeyCode, Mut, ReflectComponent, Res, ResMut, Resource,
+    Transform, World,
+};
+use bevy::reflect::{FromType, TypeData};
 use bevy::tasks::{AsyncComputeTaskPool, Task};
+use bevy::utils::tracing::instrument::WithSubscriber;
 use bevy::utils::HashMap;
 use bevytor_script::{CreateScript, Script};
 use futures_lite::future;
 use libloading::{Library, Symbol};
+use std::any::TypeId;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -45,11 +53,12 @@ impl ScriptableRegistry {
         let pool = AsyncComputeTaskPool::get();
         let task = pool.spawn(async move {
             let base_path = Path::new(folder_path_clone.as_str());
-            if force || Self::check_exists(base_path) {
+            if force || !Self::check_exists(base_path) {
                 Self::build(base_path);
             }
             let clone_lib_path = Self::clone_lib_file(base_path);
 
+            println!("load async {}", clone_lib_path.to_str().unwrap());
             unsafe {
                 (
                     ScriptableRegistry::load_script(&clone_lib_path),
@@ -82,9 +91,19 @@ impl ScriptableRegistry {
         clone_lib_path
     }
 
+    pub fn start(&mut self, world: &mut World) {
+        for (_, entry) in &mut self.impls {
+            println!("run start");
+            entry.state.script.start(world);
+            println!("done start");
+        }
+    }
+
     pub fn exec(&mut self, world: &mut World) {
         for (_, entry) in &mut self.impls {
-            entry.state.script.run(world);
+            world.resource_scope(|world, input: Mut<Input<KeyCode>>| {
+                entry.state.script.run(world, &input);
+            });
         }
     }
 
@@ -139,7 +158,19 @@ pub fn handle_tasks(world: &mut World) {
         }
         for new_impl in new_impls {
             registry.compiling_impls.remove(&new_impl.folder_path);
-            new_impl.state.script.init(world);
+            {
+                let new_types = new_impl.state.script.init(world);
+                let type_registry = world.resource_mut::<AppTypeRegistry>();
+                let mut r = type_registry.write();
+
+                for (mut new_type, component, serialize, deserialize) in new_types {
+                    new_type.insert(component);
+                    new_type.insert(serialize);
+                    new_type.insert(deserialize);
+                    r.add_registration(new_type);
+                }
+            }
+
             let old_impl = registry
                 .impls
                 .insert(new_impl.folder_path.clone(), new_impl);

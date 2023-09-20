@@ -11,11 +11,12 @@ edition = "2021"
 
 # keep deps synced with plugins, some dependencies can cause changes in typeId
 [dependencies]
-bevy = { version = "0.10.1", features = ["bevy_dynamic_plugin"] }
-# for the love of god don't use relative path as different path changes the typeId
+bevy = { version = "0.11.2", features = ["bevy_dynamic_plugin"] }
+# for the love of god don't use relative patsh as different path changes the typeId
 bevytor_core = { path = "C:/Users/grabn/Documents/Faks/bevytor/cargo/bevytor_core", version = "0.1.0" }
 bevytor_script = { path = "C:/Users/grabn/Documents/Faks/bevytor/cargo/bevytor_script", version = "0.1.0" }
-bevy_egui = "0.20.2"
+bevytor_derive = { path = "C:/Users/grabn/Documents/Faks/bevytor/cargo/bevytor_derive", version = "0.1.0" }
+bevy_egui = "0.21.0"
 serde = "1.0.144"
 serde_json = "1.0.85"
 ron = "0.8"
@@ -25,9 +26,9 @@ sysinfo = "0.27.1"
 libloading = "0.7.4"
 regex = "1.7.3"
 futures-lite = "1.13.0"
-bevy_mod_picking = "0.12.0"
-bevy_transform_gizmo = "0.6.0"
-smooth-bevy-cameras = "0.8.0"
+bevy_mod_picking = "0.15.0"
+bevy_transform_gizmo = "0.8.0"
+smooth-bevy-cameras = "0.9.0"
 paste = "1.0.13"
 
 #[features]

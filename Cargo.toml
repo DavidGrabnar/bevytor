@@ -8,6 +8,6 @@ edition = "2021"
 [dependencies]
 # libloading = "0.7.4"
 # bevytor_script = { path = "cargo/bevytor_script" }
-bevy = { version = "0.10.1", features = ["bevy_dynamic_plugin"] }
-bevy_egui = "0.20.2"
+bevy = { version = "0.11.2" }
+# bevy_egui = "0.20.2"
 # bevytor_core = { path = "cargo/bevytor_core" }

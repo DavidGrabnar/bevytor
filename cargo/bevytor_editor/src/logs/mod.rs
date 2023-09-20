@@ -1,5 +1,5 @@
 use bevy::app::{App, Plugin};
-use bevy::prelude::{EventReader, ResMut, Resource};
+use bevy::prelude::{Event, EventReader, ResMut, Resource, Update};
 use bevy_egui::egui::{ScrollArea, Ui};
 use std::collections::linked_list::Iter;
 use std::collections::LinkedList;
@@ -89,6 +89,7 @@ fn store_logs(mut reader: EventReader<PushLog>, mut buffer: ResMut<LogBuffer>) {
     }
 }
 
+#[derive(Event)]
 pub struct PushLog(pub String, pub Level);
 
 pub struct LogPlugin;
@@ -97,6 +98,6 @@ impl Plugin for LogPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LogBuffer>()
             .add_event::<PushLog>()
-            .add_system(store_logs);
+            .add_systems(Update, store_logs);
     }
 }

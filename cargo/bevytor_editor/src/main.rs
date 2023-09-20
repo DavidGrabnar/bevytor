@@ -5,7 +5,9 @@ mod error;
 mod core;
 mod logs;
 mod scripts;
+mod third_party;
 mod ui;
+mod modules;
 
 use crate::plugin::EditorPlugin;
 use bevy::asset::HandleId;

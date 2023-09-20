@@ -1,73 +1,11 @@
-pub mod tree;
-
 #[derive(Component)]
 pub struct SelectedEntity;
 
-use crate::tree::{Node, Tree};
 use bevy::ecs::entity::Entities;
 use bevy::prelude::*;
 use bevy_egui::egui::{DragValue, Grid};
 use bevy_egui::{egui, EguiContext, EguiContexts};
 use std::collections::HashMap;
-
-pub fn setup_ui_hierarchy(
-    mut egui_context: EguiContexts,
-    query_hierarchy: Query<(Entity, Option<&Parent>, Option<&Children>, Option<&Name>)>,
-    query_selected_entity: Query<Entity, With<SelectedEntity>>,
-    mut commands: Commands,
-    entities: &Entities,
-) {
-    let tree = update_state_hierarchy(query_hierarchy, entities);
-    bevy_egui::egui::Window::new("Hierarchy").show(egui_context.ctx_mut(), |ui| {
-        let action = show_ui_hierarchy(ui, &tree);
-        if let tree::Action::Selected(selected_entity) = action {
-            for entity in query_selected_entity.iter() {
-                commands.entity(entity).remove::<SelectedEntity>();
-            }
-            commands.entity(selected_entity).insert(SelectedEntity);
-        }
-    });
-}
-
-pub fn update_state_hierarchy(
-    hierarchy: Query<(Entity, Option<&Parent>, Option<&Children>, Option<&Name>)>,
-    entities: &Entities,
-) -> Tree {
-    let mut entity_name_map: HashMap<Entity, String> = HashMap::new();
-    for (entity, _parent, _children, name) in hierarchy.iter() {
-        entity_name_map.insert(entity, get_label(entity, name));
-    }
-
-    let mut entity_children: HashMap<Entity, Vec<(&Entity, &String)>> = HashMap::new();
-    for (entity, _parent, children, _name) in hierarchy.iter() {
-        if let Some(some_children) = children {
-            let mut existing_children = some_children
-                .iter()
-                .filter(|entity| entities.contains(**entity))
-                .map(|entity| (entity, entity_name_map.get(entity).unwrap()))
-                .collect::<Vec<_>>();
-            existing_children.sort_by_key(|entity| entity.0.index()); // TODO remove???
-            entity_children.insert(entity, existing_children);
-        }
-    }
-    let mut parents = vec![];
-    for (entity, parent, _children, name) in hierarchy.iter() {
-        if parent.is_none() {
-            let x = build_node(
-                (entity, entity_name_map.get(&entity).unwrap().to_string()),
-                &entity_children,
-            );
-            parents.push(x);
-        }
-    }
-
-    let root = Node::new(None, parents);
-    tree::Tree::new(root)
-}
-
-pub fn show_ui_hierarchy(ui: &mut egui::Ui, tree: &tree::Tree) -> tree::Action {
-    tree.ui(ui)
-}
 
 pub fn setup_ui_inspector(
     mut egui_context: EguiContexts,
@@ -220,24 +158,6 @@ pub fn setup_ui_inspector(
     }
 }*/
 
-fn build_node(
-    entity: (Entity, String),
-    entity_children: &HashMap<Entity, Vec<(&Entity, &String)>>,
-) -> tree::Node {
-    let mut child_nodes = vec![];
-
-    if let Some(children) = entity_children.get(&entity.0) {
-        for child in children.iter() {
-            child_nodes.push(build_node(
-                (*child.0, (*child.1.clone()).to_string()),
-                entity_children,
-            ));
-        }
-    }
-
-    tree::Node::new(Some(entity), child_nodes)
-}
-
 fn build_rotation_drag_value_input<'a>(
     transform: &'a mut Transform,
     euler_rot: &'a EulerRot,
@@ -254,11 +174,4 @@ fn build_rotation_drag_value_input<'a>(
         }
         transform.rotation.to_euler(*euler_rot).0 as f64
     })
-}
-
-pub fn get_label(entity: Entity, name: Option<&Name>) -> String {
-    let label = name
-        .map(|n| n.as_str().to_string())
-        .unwrap_or(format!("Entity {}", entity.index()));
-    label
 }
